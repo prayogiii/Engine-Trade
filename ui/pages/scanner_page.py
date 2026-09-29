@@ -225,6 +225,24 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
                             top_buys = buy_signals[:10]
                             st.session_state.scan_results['buy_signals'] = buy_signals
                             st.session_state.scan_results['top_buys'] = top_buys
+
+                        # ═══ EXPANDER DETAIL AI RE-RANK (restore dari monolith) ═══
+                        with st.expander("📋 Lihat Detail AI Re‑Rank", expanded=False):
+                            ai_table = []
+                            for r in candidates:
+                                if r.get('ai_confirm') is not None:
+                                    ai_table.append({
+                                        "Ticker": r['ticker'],
+                                        "Tech Score": f"{r['techScore']:.3f}",
+                                        "Hybrid Score": f"{r.get('hybrid_score', r['techScore']):.3f}",
+                                        "AI Boost": f"{r.get('ai_boost', 0):.3f}",
+                                        "AI Confirm": "✅" if r.get('ai_confirm') else "❌",
+                                        "Reason": r.get('ai_reason', '')
+                                    })
+                            if ai_table:
+                                df_ai = pd.DataFrame(ai_table)
+                                df_ai.index = range(1, len(df_ai) + 1)
+                                st.dataframe(df_ai, use_container_width=True)
                     except Exception as e:
                         st.error(f"Gagal memproses respons AI: {e}")
                 else:
