@@ -200,10 +200,10 @@ def filter_relevant(news_list, ticker, ticker_info=None):
 # NEWS SOURCES
 # ═══════════════════════════════════════════════════════════════
 def get_google_news_rss(query_str, num=5, days_back=7):
+    """Ambil berita dari Google News RSS, FILTER TANGGAL MANUAL."""
     if not RSS_AVAILABLE:
         return [], "RSS tidak tersedia"
     try:
-        import requests
         cutoff_date = datetime.now() - timedelta(days=days_back)
         cutoff_str = cutoff_date.strftime('%Y-%m-%d')
         cutoff_ts = cutoff_date.timestamp()
@@ -213,28 +213,13 @@ def get_google_news_rss(query_str, num=5, days_back=7):
             f"https://news.google.com/rss/search?"
             f"q={urllib.parse.quote(query_with_date)}&hl=id&gl=ID&ceid=ID:id"
         )
-
-        # ▼ KEY FIX: pakai requests + headers (Google blok kalau tanpa UA)
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/rss+xml, application/xml, text/xml, */*",
-            "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
-        }
-        r = requests.get(url, headers=headers, timeout=12)
-        if r.status_code != 200:
-            return [], f"Google News HTTP {r.status_code}"
-
-        feed = feedparser.parse(r.text)
+        feed = feedparser.parse(url)   # ← KUNCI: langsung URL, bukan requests.get
 
         news = []
         for e in feed.entries[:num * 3]:
-            pp = e.get('published_parsed')
-            if pp:
-                pub_ts = time.mktime(pp)
+            published_parsed = e.get('published_parsed')
+            if published_parsed:
+                pub_ts = time.mktime(published_parsed)
                 if pub_ts < cutoff_ts:
                     continue
             else:
@@ -245,7 +230,7 @@ def get_google_news_rss(query_str, num=5, days_back=7):
                 'summary': re.sub('<[^<]+?>', '', e.get('summary', '')),
                 'source': 'Google News',
                 'published': e.get('published', ''),
-                'published_ts': pub_ts,
+                'published_ts': pub_ts
             })
             if len(news) >= num:
                 break
