@@ -296,12 +296,37 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
     if top_sells:
         for idx, r in enumerate(top_sells):
             rank = idx + 1
+            tick_clean = r['ticker'].replace(".JK", "").strip().upper()
+
             col1, col2 = st.columns([3, 1])
             with col1:
                 st.markdown(f"#{rank} **{r['ticker']}** — {r['signal']}")
-                st.caption(f"Tech Score: {r['techScore']:.3f} | Est Return: {r['muEst']*100:.2f}% | Regime: {r['regime']}")
+                st.caption(
+                    f"Tech Score: {r['techScore']:.3f} | "
+                    f"Est Return: {r['muEst']*100:.2f}% | "
+                    f"Regime: {r['regime']}"
+                )
             with col2:
                 st.metric("Harga", f"Rp {r['lastPrice']:,.0f}")
+
+                # ▼ TAMBAHKAN INI — render AI cross-check untuk SELL
+                ai_results = st.session_state.get('ai_crosscheck_sell', [])
+                ai_match = next(
+                    (item for item in ai_results
+                     if item.get("ticker", "").upper() == tick_clean),
+                    None
+                )
+                if ai_match:
+                    sent_score = ai_match.get("sentiment_score", 0.0)
+                    sent_label = f"+{sent_score:.2f}" if sent_score >= 0 else f"{sent_score:.2f}"
+                    # untuk SELL: sentimen NEGATIF = sejalan
+                    status = "☑️ Sejalan" if sent_score < 0 else "⛔ Berlawanan"
+                    note = ai_match.get("note", "")
+                    st.markdown(
+                        f"**AI Sentimen: {sent_label}**<br/>{status}<br/>"
+                        f"📰 <small>_{note}_</small>",
+                        unsafe_allow_html=True
+                    )
             st.divider()
     else:
         st.caption("(Tidak ada kandidat Jual yang memenuhi threshold)")

@@ -200,39 +200,57 @@ def filter_relevant(news_list, ticker, ticker_info=None):
 # NEWS SOURCES
 # ═══════════════════════════════════════════════════════════════
 def get_google_news_rss(query_str, num=5, days_back=7):
-    """Ambil berita dari Google News RSS, FILTER TANGGAL MANUAL."""
     if not RSS_AVAILABLE:
         return [], "RSS tidak tersedia"
     try:
+        import requests
         cutoff_date = datetime.now() - timedelta(days=days_back)
-        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+        cutoff_str = cutoff_date.strftime('%Y-%m-%d')
         cutoff_ts = cutoff_date.timestamp()
 
         query_with_date = f"{query_str} after:{cutoff_str}"
-        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query_with_date)}&hl=id&gl=ID&ceid=ID:id"
-        feed = feedparser.parse(url)
+        url = (
+            f"https://news.google.com/rss/search?"
+            f"q={urllib.parse.quote(query_with_date)}&hl=id&gl=ID&ceid=ID:id"
+        )
+
+        # ▼ KEY FIX: pakai requests + headers (Google blok kalau tanpa UA)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
+        }
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code != 200:
+            return [], f"Google News HTTP {r.status_code}"
+
+        feed = feedparser.parse(r.text)
 
         news = []
         for e in feed.entries[:num * 3]:
-            published_parsed = e.get("published_parsed")
-            if published_parsed:
-                pub_ts = time.mktime(published_parsed)
+            pp = e.get('published_parsed')
+            if pp:
+                pub_ts = time.mktime(pp)
                 if pub_ts < cutoff_ts:
                     continue
             else:
                 pub_ts = 0
 
             news.append({
-                "title": e.get("title", "").strip(),
-                "summary": re.sub("<[^<]+?>", "", e.get("summary", "")),
-                "source": "Google News",
-                "published": e.get("published", ""),
-                "published_ts": pub_ts,
+                'title': e.get('title', '').strip(),
+                'summary': re.sub('<[^<]+?>', '', e.get('summary', '')),
+                'source': 'Google News',
+                'published': e.get('published', ''),
+                'published_ts': pub_ts,
             })
             if len(news) >= num:
                 break
 
-        news.sort(key=lambda x: x["published_ts"], reverse=True)
+        news.sort(key=lambda x: x['published_ts'], reverse=True)
         return news[:num], None
     except Exception as e:
         return [], str(e)
