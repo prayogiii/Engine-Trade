@@ -1,0 +1,1 @@
+"""Service layer QuantRisk Pro — I/O eksternal (Sheets, Gemini, news, yfinance)."""

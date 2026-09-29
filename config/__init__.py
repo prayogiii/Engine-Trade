@@ -1,0 +1,1 @@
+"""Konfigurasi statis aplikasi QuantRisk Pro."""

@@ -1,0 +1,50 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual Environment ──
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+!.env.example
+
+# ── Streamlit ──
+.streamlit/secrets.toml
+.streamlit/cache/
+
+# ── IDE & Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs & Debug ──
+*.log
+logs/
+debug_*.py
+debug_*.log
+check_*.py
+
+# ── Data lokal ──
+*.db
+*.sqlite
+*.sqlite3
+data/
+exports/

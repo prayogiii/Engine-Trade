@@ -1,0 +1,1 @@
+"""Pure domain logic QuantRisk Pro — tanpa Streamlit import."""

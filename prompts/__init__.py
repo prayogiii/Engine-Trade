@@ -1,0 +1,1 @@
+"""Kumpulan prompt template untuk Gemini AI."""
