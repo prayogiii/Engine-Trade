@@ -13,14 +13,20 @@ MC_PESSIMISM = 0.82
 
 # ── Gemini model prioritas (dari paling murah/reliable) ──
 PREFERRED_GEMINI_MODELS = [
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash",
+    # ═══ Kuota besar (500 RPD) — prioritas utama untuk volume ═══
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+
+    # ═══ Terbaru (20 RPD) — kualitas tinggi, backup ═══
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash",
+
+    # ═══ Legacy 2.5 (20 RPD) — fallback terakhir ═══
     "gemini-2.5-flash",
-    "gemini-1.5-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-flash-lite-latest",
-    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
 ]
 
 # ── Cache TTL (detik) ──
