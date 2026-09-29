@@ -246,8 +246,23 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
                 if active_info:
                     title_text += f" &nbsp; ⏳ `[SWING AKTIF - Hari ke-{active_info['b_days']}]`"
                 st.markdown(title_text)
-            with col2:
-                st.metric("Harga", f"Rp {r['lastPrice']:,.0f}")
+                with col2:
+                    st.metric("Harga", f"Rp {r['lastPrice']:,.0f}")
+
+                    # ═══ Tampilkan AI Cross-check kalau sudah dijalankan ═══
+                    ai_results = st.session_state.get('ai_crosscheck_buy', [])
+                    ai_match = next((item for item in ai_results
+                                    if item.get("ticker", "").upper() == tick_clean), None)
+                    if ai_match:
+                        sent_score = ai_match.get("sentiment_score", 0.0)
+                        sent_label = f"+{sent_score:.2f}" if sent_score >= 0 else f"{sent_score:.2f}"
+                        status = "☑️ Sejalan" if sent_score > 0 else "⛔ Berlawanan"
+                        note = ai_match.get("note", "")
+                        st.markdown(
+                            f"**AI Sentimen: {sent_label}**<br/>{status}<br/>"
+                            f"📰 <small>_{note}_</small>",
+                            unsafe_allow_html=True
+                        )
 
             if active_info:
                 st.caption(f"⏳ **Swing Aktif dari {active_info['waktu']}** (Hari bursa ke-{active_info['b_days']})")
@@ -290,3 +305,97 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
             st.divider()
     else:
         st.caption("(Tidak ada kandidat Jual yang memenuhi threshold)")
+    # ═══════════════════════════════════════════════════════════════
+    # PERKUAT CROSS-CHECK DENGAN AI SENTIMENT (OPSIONAL)
+    # ═══════════════════════════════════════════════════════════════
+    if buy_signals:
+        st.markdown("---")
+        reinforce_col, _ = st.columns([1, 3])
+        with reinforce_col:
+            if st.button("🛡️ Perkuat Cross-Check dgn Sentimen AI (tambahan)",
+                         key="reinforce_ai"):
+                if not st.session_state.get("gemini_api_key"):
+                    st.error("API Key Gemini diperlukan.")
+                else:
+                    _run_ai_crosscheck(sr, mode_scan)
+
+
+def _run_ai_crosscheck(sr, mode_scan):
+    """Jalankan AI Cross-Check untuk top BUY & SELL."""
+    import json
+    from services.gemini_client import call_gemini_auto_rotate
+    from services.news_client import get_headlines_for_ticker
+
+    with st.spinner("🧠 Mengambil berita terbaru & menganalisis sentimen..."):
+        candidates = sr.get('top_buys', [])
+        top_sell_candidates = sr.get('top_sells', [])
+
+        if not candidates and not top_sell_candidates:
+            st.warning("Tidak ada kandidat untuk dianalisis.")
+            return
+
+        # ── Build prompt untuk BUY ──
+        headlines_map = {}
+        for r in candidates:
+            headlines_map[r['ticker']] = get_headlines_for_ticker(r['ticker'])
+
+        prompt = (
+            "Berikut hasil scan teknikal 15 saham. Verifikasi sinyal BUY dengan sentimen berita TERBARU. "
+            "KELUARKAN HANYA JSON array, TANPA teks lain. "
+            'Format: [{"ticker": "BBRI", "sentiment_score": 0.0 (skala -1..1), "note": "singkat berdasarkan berita"}]\n\n'
+        )
+        for r in candidates:
+            tick = r['ticker']
+            headlines = headlines_map.get(tick, ["(tidak ada berita)"])
+            prompt += f"{tick} | Tech Score: {r['techScore']:.3f} | Est Return: {r['muEst']*100:.2f}% | Berita: {'; '.join(headlines)}\n"
+
+        raw, err = call_gemini_auto_rotate(prompt)
+        sentiments = []
+        if raw and not err:
+            try:
+                start_idx = raw.rfind('[')
+                if start_idx != -1:
+                    json_str = raw[start_idx:].strip()
+                    if json_str.startswith("```json"):
+                        json_str = json_str[7:]
+                    if json_str.endswith("```"):
+                        json_str = json_str[:-3]
+                    sentiments = json.loads(json_str)
+            except Exception as e:
+                st.error(f"Gagal parse JSON dari AI: {e}")
+        else:
+            st.error(f"Gagal memanggil Gemini: {err}")
+
+        # ── Build prompt untuk SELL ──
+        sell_ai = []
+        if top_sell_candidates:
+            headlines_sell = {r['ticker']: get_headlines_for_ticker(r['ticker']) for r in top_sell_candidates}
+            sell_prompt = (
+                "Berikut hasil scan teknikal saham dengan sinyal JUAL. "
+                "Verifikasi sentimen berita TERBARU. "
+                'KELUARKAN HANYA JSON array: [{"ticker": "BBRI", "sentiment_score": -0.5..0.5, "note": "singkat"}]\n\n'
+            )
+            for r in top_sell_candidates:
+                tick = r['ticker']
+                headlines = headlines_sell.get(tick, ["(tidak ada berita)"])
+                sell_prompt += f"{tick} | Tech Score: {r['techScore']:.3f} | Est Return: {r['muEst']*100:.2f}% | Berita: {'; '.join(headlines)}\n"
+
+            try:
+                raw_s, err_s = call_gemini_auto_rotate(sell_prompt)
+                if raw_s:
+                    start_s = raw_s.rfind('[')
+                    if start_s != -1:
+                        json_s = raw_s[start_s:].strip()
+                        if json_s.startswith("```json"):
+                            json_s = json_s[7:]
+                        if json_s.endswith("```"):
+                            json_s = json_s[:-3]
+                        sell_ai = json.loads(json_s)
+            except Exception:
+                pass
+
+        # ── Simpan ke session_state & rerun ──
+        st.session_state['ai_crosscheck_buy'] = sentiments
+        st.session_state['ai_crosscheck_sell'] = sell_ai
+        st.session_state['ai_crosscheck_done'] = True
+        st.rerun()
