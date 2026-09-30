@@ -5,6 +5,7 @@ Fitur:
   2. Alert broker baru (fresh money)
   3. 2 tabel terpisah: Akumulator | Distributor + filter lot
   4. Historical floating chart (plotly)
+  5. @st.fragment agar ganti filter tidak refresh halaman
 """
 from __future__ import annotations
 
@@ -15,6 +16,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+
+
+# ═══════════════════════════════════════════════════════════════
+# FRAGMENT FALLBACK (Streamlit < 1.33)
+# ═══════════════════════════════════════════════════════════════
+try:
+    _fragment = st.fragment
+except AttributeError:
+    def _fragment(func):
+        return func
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -203,7 +214,7 @@ def _fmt_lot(v: int) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 4. TABLE RENDERER (shared by Akumulator / Distributor)
+# 4. TABLE RENDERER
 # ═══════════════════════════════════════════════════════════════
 def _render_broker_table(rows: list, title: str, accent_color: str):
     """Render 1 tabel broker dengan header + rows."""
@@ -268,10 +279,7 @@ def _render_broker_table(rows: list, title: str, accent_color: str):
 # 5. FEATURE 1: ALERT BROKER BARU
 # ═══════════════════════════════════════════════════════════════
 def _get_fresh_brokers(history: list) -> dict:
-    """
-    Bandingkan top buyer/seller entry terbaru vs entry sebelumnya.
-    Return {"buyers": [...], "sellers": [...]} — yang BARU muncul.
-    """
+    """Bandingkan top buyer/seller entry terbaru vs sebelumnya."""
     if len(history) < 2:
         return {"buyers": [], "sellers": []}
 
@@ -352,7 +360,6 @@ def _render_historical_chart(ticker: str, history: list):
         agg = _aggregate_until_date(history, d)
         rows = _build_rows(agg, close_history[d])
 
-        # Net buyer total (yang lagi profit + loss) dan net seller total
         total_buyer_fp = sum(r["FLOATING IDR"] for r in rows if r["NET"] > 0)
         total_seller_fp = sum(r["FLOATING IDR"] for r in rows if r["NET"] < 0)
 
@@ -403,15 +410,7 @@ def _render_historical_chart(ticker: str, history: list):
 # 7. MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════
 def render_floating_position(ticker: str, history: list):
-    """
-    Render lengkap:
-      - Alert broker baru
-      - Metric header
-      - Toggle filter lot
-      - 2 tabel: Akumulator | Distributor
-      - Expander broker kecil
-      - Historical chart
-    """
+    """Render lengkap: alert, metric, tabel interaktif, chart, verdict."""
     if not history:
         st.caption("(Belum ada history untuk hitung floating position)")
         return
@@ -421,10 +420,10 @@ def render_floating_position(ticker: str, history: list):
         st.caption("(Harga closing tidak tersedia dari yfinance)")
         return
 
-    # ── 1. Alert broker baru ──
+    # Alert broker baru
     _render_fresh_alert(history)
 
-    # ── 2. Agregasi + hitung ──
+    # Agregasi
     agg = _aggregate_brokers(history)
     if not agg:
         st.caption("(Tidak ada data broker di history)")
@@ -434,7 +433,7 @@ def render_floating_position(ticker: str, history: list):
     buyers = [r for r in rows if r["NET"] > 0]
     sellers = [r for r in rows if r["NET"] < 0]
 
-    # ── 3. Metric header ──
+    # ── Metric header (di luar fragment) ──
     total_buyer_fp = sum(r["FLOATING IDR"] for r in buyers)
     total_seller_fp = sum(r["FLOATING IDR"] for r in sellers)
 
@@ -442,42 +441,57 @@ def render_floating_position(ticker: str, history: list):
     c1.metric("Closing", f"{closing:,.0f}")
     c2.metric("Akumulator", len(buyers))
     c3.metric("Distributor", len(sellers))
-    c4.metric("Net Floating",
-              _fmt_idr(total_buyer_fp + total_seller_fp))
+    c4.metric("Net Floating", _fmt_idr(total_buyer_fp + total_seller_fp))
 
-    # ── 4. Filter lot ──
+    # ── Tabel interaktif (fragment) ──
+    _render_floating_tables(ticker, buyers, sellers)
+
+    # ── Chart historis (static) ──
+    if len(history) >= 2:
+        st.markdown("##### 📈 Historis Floating")
+        _render_historical_chart(ticker, history)
+
+    # ── Verdict ──
+    _render_verdict(buyers, sellers, closing)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 8. FRAGMENT: SELECTBOX + 2 TABEL
+# ═══════════════════════════════════════════════════════════════
+@_fragment
+def _render_floating_tables(ticker: str, buyers: list, sellers: list):
+    """Bagian interaktif — pakai @st.fragment supaya ganti lot tidak refresh halaman."""
+
+    # Auto-default min lot berdasar volume terbesar di ticker ini
+    all_rows = buyers + sellers
+    max_vol = max((max(r["AKUM"], r["DIST"]) for r in all_rows), default=0)
+
+    options = [0, 10_000, 50_000, 100_000, 500_000, 1_000_000]
+    threshold = max_vol * 0.10
+    default_idx = next(
+        (i for i, v in enumerate(options) if v >= threshold and v > 0),
+        2,
+    )
+
     min_lot = st.selectbox(
         "Minimum lot (filter broker kecil)",
-        options=[0, 50_000, 100_000, 500_000, 1_000_000],
-        index=2,
+        options=options,
+        index=default_idx,
         format_func=lambda x: f"{x:,} lot" if x > 0 else "Tampilkan semua",
         key=f"fp_min_lot_{ticker}",
     )
 
-    big_buyers = [r for r in buyers if max(r["AKUM"], r["DIST"]) >= min_lot]
-    small_buyers = [r for r in buyers if max(r["AKUM"], r["DIST"]) < min_lot]
+    big_buyers    = [r for r in buyers  if max(r["AKUM"], r["DIST"]) >= min_lot]
+    small_buyers  = [r for r in buyers  if max(r["AKUM"], r["DIST"]) <  min_lot]
+    big_sellers   = [r for r in sellers if max(r["AKUM"], r["DIST"]) >= min_lot]
+    small_sellers = [r for r in sellers if max(r["AKUM"], r["DIST"]) <  min_lot]
 
-    big_sellers = [r for r in sellers if max(r["AKUM"], r["DIST"]) >= min_lot]
-    small_sellers = [r for r in sellers if max(r["AKUM"], r["DIST"]) < min_lot]
-
-    # ── 5. 2 tabel utama ──
     col_a, col_b = st.columns(2)
-
     with col_a:
-        _render_broker_table(
-            big_buyers,
-            "📈 AKUMULATOR (net buyer)",
-            "#10b981",
-        )
-
+        _render_broker_table(big_buyers, "📈 AKUMULATOR (net buyer)", "#10b981")
     with col_b:
-        _render_broker_table(
-            big_sellers,
-            "📉 DISTRIBUTOR (net seller)",
-            "#ef4444",
-        )
+        _render_broker_table(big_sellers, "📉 DISTRIBUTOR (net seller)", "#ef4444")
 
-    # ── 6. Expander broker kecil ──
     if small_buyers or small_sellers:
         with st.expander(
             f"🔍 Broker kecil (lot < {min_lot:,}) — "
@@ -489,15 +503,10 @@ def render_floating_position(ticker: str, history: list):
             with c2:
                 _render_broker_table(small_sellers, "Distributor kecil", "#ef4444")
 
-    # ── 7. Historical chart ──
-    if len(history) >= 2:
-        st.markdown("##### 📈 Historis Floating")
-        _render_historical_chart(ticker, history)
 
-    # ── 8. Kesimpulan ──
-    _render_verdict(buyers, sellers, closing)
-
-
+# ═══════════════════════════════════════════════════════════════
+# 9. VERDICT
+# ═══════════════════════════════════════════════════════════════
 def _render_verdict(buyers, sellers, closing):
     """Kesimpulan teks di bawah."""
     if not buyers and not sellers:
