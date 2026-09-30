@@ -11,6 +11,7 @@ from ui.charts.bandarmology import (
     build_broker_sankey, render_trade_flow_spectrum_bar, fmt_money,
 )
 from ui.components.broker_summary import render_broker_summary_and_aggregate_ui
+from ui.components.floating_position import render_floating_position
 
 
 def display_bandarmology_tab(ticker):
@@ -33,6 +34,10 @@ def display_bandarmology_tab(ticker):
         st.info(f"📝 {data['summary_narrative']}")
 
     render_broker_summary_and_aggregate_ui(data.get('buyers', []), data.get('sellers', []))
+    st.divider()
+    # ── BARU: Summary Floating Position ──
+    st.markdown("#### 📊 Summary Floating Position")
+    render_floating_position(ticker, data.get('history', []))
     st.divider()
 
     # CHART 1: BROKER FLOW
