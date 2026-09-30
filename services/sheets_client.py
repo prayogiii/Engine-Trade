@@ -462,6 +462,16 @@ def simpan_riwayat(ringkasan, aksi_mode="simpan_baru", target_saham=None):
         valid_records = [r for r in records if any(str(v).strip() for v in r.values())]
         data = list(valid_records)
 
+        def _norm_key(rec):
+            """Key dedup: Waktu (dipotong ke menit) + Saham + Gaya."""
+            waktu = str(rec.get("Waktu", "")).strip()
+            # Potong ke menit: '2026-09-30 20:58:45' → '2026-09-30 20:58'
+            if len(waktu) >= 16:
+                waktu = waktu[:16]
+            saham = str(rec.get("Saham", "")).replace(".JK", "").strip().upper()
+            gaya = str(rec.get("Gaya", "SW")).strip().upper()
+            return (waktu, saham, gaya)
+
         if aksi_mode == "update" and target_saham:
             saham_target_clean = str(target_saham).replace(".JK", "").strip().upper()
             for item_new in items_to_add:
@@ -478,9 +488,20 @@ def simpan_riwayat(ringkasan, aksi_mode="simpan_baru", target_saham=None):
                 if not updated:
                     data.insert(0, ringkasan_bersih)
         else:
+            # ── Mode simpan_baru: cek duplikat by (Waktu_menit, Saham, Gaya) ──
             for item in reversed(items_to_add):
                 ringkasan_bersih = {k: _bersihkan_untuk_json(v) for k, v in item.items()}
-                data.insert(0, ringkasan_bersih)
+                key_new = _norm_key(ringkasan_bersih)
+
+                replaced = False
+                for idx, record in enumerate(data):
+                    if _norm_key(record) == key_new:
+                        data[idx] = ringkasan_bersih
+                        replaced = True
+                        break
+
+                if not replaced:
+                    data.insert(0, ringkasan_bersih)
 
         data = data[:3000]
         if data:
