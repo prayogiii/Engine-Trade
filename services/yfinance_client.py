@@ -16,6 +16,11 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+try:
+    import idx_bridge  # Edge + CDP yang sudah lolos Cloudflare (lihat start_edge.bat)
+except ImportError:
+    idx_bridge = None
+
 
 # ═══════════════════════════════════════════════════════════════
 # SECTION 1 — YFINANCE WRAPPERS
@@ -221,109 +226,147 @@ def fetch_actual_data_yfinance(saham, waktu_str):
 # ═══════════════════════════════════════════════════════════════
 # SECTION 2 — IDX API SCRAPING
 # ═══════════════════════════════════════════════════════════════
+_IDX_HEADERS = {
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9,id;q=0.8",
+    "egrum": "isAjax:true",
+    "referer": "https://www.idx.co.id/id/data-pasar/ringkasan-perdagangan/ringkasan-saham/",
+    "user-agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "x-requested-with": "XMLHttpRequest",
+}
+
+_IDX_SUMMARY_URL = (
+    "https://www.idx.co.id/primary/TradingSummary/GetStockSummary?length=9999&start=0"
+)
+
+
+def _bridge_ready():
+    return idx_bridge is not None and idx_bridge.available()
+
+
+def _idx_get_json(url, timeout=25, use_bridge=True):
+    """
+    GET JSON dari idx.co.id.
+    1) Lewat Edge (CDP) kalau aktif — jalur yang lolos Cloudflare.
+    2) Fallback curl_cffi/requests (biasanya 403 selama Cloudflare aktif).
+    """
+    bridge_err = None
+    if use_bridge and _bridge_ready():
+        try:
+            return idx_bridge.fetch_json(url)
+        except idx_bridge.IDXBridgeError as e:
+            bridge_err = e
+
+    try:
+        from curl_cffi import requests as curl_requests
+        r = curl_requests.get(url, headers=_IDX_HEADERS, timeout=timeout, impersonate="chrome120")
+    except ImportError:
+        r = requests.get(url, headers=_IDX_HEADERS, timeout=timeout)
+
+    if r.status_code != 200:
+        msg = f"IDX HTTP {r.status_code}"
+        if bridge_err:
+            msg += f" (bridge: {bridge_err})"
+        raise RuntimeError(msg)
+    return r.json()
+
+
+def _idx_get_many(urls):
+    """Banyak URL, satu sesi Edge. Return list payload (None untuk yang gagal)."""
+    if _bridge_ready():
+        try:
+            return idx_bridge.fetch_json_many(urls)
+        except idx_bridge.IDXBridgeError:
+            pass
+    out = []
+    for u in urls:
+        try:
+            out.append(_idx_get_json(u, use_bridge=False))
+        except Exception:
+            out.append(None)
+    return out
+
+
+def _extract_items(payload):
+    if isinstance(payload, dict):
+        return payload.get("data") or payload.get("Data") or []
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def _fetch_idx_all_stock_summary():
     """Semua data saham dari IDX sekali request (cache 30 menit)."""
-    url = "https://www.idx.co.id/primary/TradingSummary/GetStockSummary?length=9999&start=0"
-    headers = {
-        "accept": "application/json, text/plain, */*",
-        "accept-language": "en-US,en;q=0.9,id;q=0.8",
-        "egrum": "isAjax:true",
-        "referer": "https://www.idx.co.id/id/data-pasar/ringkasan-perdagangan/ringkasan-saham/",
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "x-requested-with": "XMLHttpRequest",
-    }
-
     try:
-        try:
-            from curl_cffi import requests as curl_requests
-            r = curl_requests.get(url, headers=headers, timeout=25, impersonate="chrome120")
-        except ImportError:
-            r = requests.get(url, headers=headers, timeout=20)
-
-        if r.status_code != 200:
-            raise RuntimeError(f"IDX HTTP {r.status_code}")
-
-        payload = r.json()
-        if isinstance(payload, dict):
-            data = payload.get("data") or payload.get("Data") or []
-        elif isinstance(payload, list):
-            data = payload
-        else:
-            data = []
-
-        if not data:
-            raise RuntimeError("IDX response kosong")
-
-        return data
-    except RuntimeError:
-        raise
+        data = _extract_items(_idx_get_json(_IDX_SUMMARY_URL))
     except Exception as e:
         raise RuntimeError(f"IDX fetch error: {e}")
+
+    if not data:
+        raise RuntimeError("IDX response kosong")
+    return data
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fetch_idx_summaries(date_strs):
+    """
+    Ringkasan SEMUA saham per tanggal, semua tanggal dalam satu sesi Edge.
+    date_strs: tuple 'YYYY-MM-DD' (terbaru dulu). Di-cache lintas ticker.
+    Return {date_str: items}; tanggal libur/gagal tidak ikut.
+    """
+    def url_for(d, style):  # style 0 = YYYY-MM-DD, 1 = YYYYMMDD
+        return f"{_IDX_SUMMARY_URL}&date={d if style == 0 else d.replace('-', '')}"
+
+    # Format tanggal yang diterima API belum pasti -> probe 3 tanggal terbaru x 2 format
+    probe = date_strs[:3]
+    probe_urls = [url_for(d, s) for s in (0, 1) for d in probe]
+    style = None
+    for i, payload in enumerate(_idx_get_many(probe_urls)):
+        if _extract_items(payload):
+            style = 0 if i < len(probe) else 1
+            break
+    if style is None:
+        return {}
+
+    out = {}
+    payloads = _idx_get_many([url_for(d, style) for d in date_strs])
+    for d, payload in zip(date_strs, payloads):
+        items = _extract_items(payload)
+        if items:
+            out[d] = items
+    return out
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _fetch_idx_foreign_flow(ticker, days=30):
-    """Scrape Foreign Flow harian dari IDX Trading Summary."""
+    """Foreign Flow harian dari IDX Trading Summary."""
     ticker_clean = str(ticker).upper().replace(".JK", "").strip()
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.idx.co.id/",
-        "X-Requested-With": "XMLHttpRequest",
-    }
 
-    rows = []
     today = datetime.now(pytz.timezone("Asia/Jakarta")).date()
-    max_iter = days + 20
+    candidates = [today - timedelta(days=i) for i in range(days + 20)]
+    date_strs = tuple(d.strftime("%Y-%m-%d") for d in candidates if d.weekday() < 5)
 
-    for i in range(max_iter):
-        if len(rows) >= days:
-            break
-        d = today - timedelta(days=i)
-        if d.weekday() >= 5:
-            continue
+    summaries = _fetch_idx_summaries(date_strs)
+    if not summaries:
+        return None
 
-        date_str = d.strftime("%Y-%m-%d")
-        date_alt = d.strftime("%Y%m%d")
-
-        endpoints = [
-            f"https://www.idx.co.id/primary/TradingSummary/GetStockSummary"
-            f"?length=9999&start=0&date={date_str}",
-            f"https://www.idx.co.id/primary/TradingSummary/GetStockSummary"
-            f"?length=9999&start=0&date={date_alt}",
-        ]
-
-        items = None
-        for url in endpoints:
-            try:
-                r = requests.get(url, headers=headers, timeout=12)
-                if r.status_code != 200:
-                    continue
+    def _num(it, *keys):
+        for k in keys:
+            v = it.get(k)
+            if v not in (None, "", "N/A", "-"):
                 try:
-                    payload = r.json()
+                    return float(str(v).replace(",", ""))
                 except Exception:
                     continue
-                if isinstance(payload, dict):
-                    items = payload.get("data") or payload.get("Data") or []
-                elif isinstance(payload, list):
-                    items = payload
-                if items:
-                    break
-            except Exception:
-                continue
+        return 0.0
 
-        if not items:
-            continue
-
+    rows = []
+    for d_str, items in summaries.items():
         for it in items:
             if not isinstance(it, dict):
                 continue
@@ -331,29 +374,25 @@ def _fetch_idx_foreign_flow(ticker, days=30):
             if code != ticker_clean:
                 continue
 
-            def _f(*keys):
-                for k in keys:
-                    v = it.get(k)
-                    if v not in (None, "", "N/A", "-"):
-                        try:
-                            return float(str(v).replace(",", ""))
-                        except Exception:
-                            continue
-                return 0.0
-
-            fb = _f("ForeignBuy", "ForeignBuyValue", "Foreign_Buy",
-                    "ForeignBuyIDR", "ForeignBuyRp", "ForeignBuyValueIDR")
-            fs = _f("ForeignSell", "ForeignSellValue", "Foreign_Sell",
-                    "ForeignSellIDR", "ForeignSellRp", "ForeignSellValueIDR")
-
-            close_px = _f("Close", "Previous", "ClosePrice", "Price")
+            fb = _num(it, "ForeignBuy", "ForeignBuyValue", "Foreign_Buy",
+                      "ForeignBuyIDR", "ForeignBuyRp", "ForeignBuyValueIDR")
+            fs = _num(it, "ForeignSell", "ForeignSellValue", "Foreign_Sell",
+                      "ForeignSellIDR", "ForeignSellRp", "ForeignSellValueIDR")
+            close_px = _num(it, "Close", "Previous", "ClosePrice", "Price")
             if 0 < fb < 1e8 and close_px > 0:
                 fb *= 100 * close_px
             if 0 < fs < 1e8 and close_px > 0:
                 fs *= 100 * close_px
 
+            # pakai tanggal dari data IDX (bukan tanggal yang diminta), supaya kalau
+            # API mengembalikan hari bursa terakhir untuk hari libur, tidak jadi baris palsu
+            try:
+                real_date = datetime.strptime(str(it.get("Date") or d_str)[:10], "%Y-%m-%d").date()
+            except ValueError:
+                real_date = datetime.strptime(d_str, "%Y-%m-%d").date()
+
             rows.append({
-                "date": d,
+                "date": real_date,
                 "foreign_buy": abs(fb),
                 "foreign_sell": abs(fs),
                 "net_foreign": fb - fs,
@@ -363,7 +402,8 @@ def _fetch_idx_foreign_flow(ticker, days=30):
     if not rows:
         return None
 
-    df = pd.DataFrame(rows).drop_duplicates(subset=["date"]).sort_values("date")
+    df = (pd.DataFrame(rows).drop_duplicates(subset=["date"])
+          .sort_values("date").tail(days))
     df = df[(df["foreign_buy"] > 0) | (df["foreign_sell"] > 0)]
     return df if not df.empty else None
 
@@ -380,21 +420,11 @@ def fetch_idx_stock_list_exclude_monitoring():
         "https://www.idx.co.id/umbraco/Surface/ListedCompany/GetStockList?language=id-id&start=0&length=9999",
         "https://www.idx.co.id/umbraco/Surface/ListedCompany/GetStockList?start=0&length=9999&exchangeBoard=&industry=&subIndustry=&search=",
     ]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.idx.co.id/",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-
     all_codes = []
     seen = set()
     for url in endpoints:
         try:
-            resp = requests.get(url, headers=headers, timeout=25)
-            if resp.status_code != 200:
-                continue
-            raw = resp.json()
+            raw = _idx_get_json(url)
 
             items = None
             if isinstance(raw, list):
