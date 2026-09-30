@@ -1,16 +1,16 @@
 """
-Summary Floating Position per broker — ala Sabarkaya.
+Summary Floating Position per broker — snapshot terbaru saja.
 Fitur:
-  1. Batch yfinance (1 request untuk N ticker)
-  2. Alert broker baru (fresh money)
+  1. Snapshot terbaru only (avg price akurat, no bias gap)
+  2. Alert broker baru (fresh money) + gap warning
   3. 2 tabel terpisah: Akumulator | Distributor + filter lot
-  4. Historical floating chart (plotly)
+  4. Historical floating chart per hari (bukan cumulative)
   5. @st.fragment agar ganti filter tidak refresh halaman
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -19,7 +19,7 @@ import yfinance as yf
 
 
 # ═══════════════════════════════════════════════════════════════
-# FRAGMENT FALLBACK (Streamlit < 1.33)
+# FRAGMENT FALLBACK
 # ═══════════════════════════════════════════════════════════════
 try:
     _fragment = st.fragment
@@ -29,11 +29,10 @@ except AttributeError:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 1. YFINANCE — SINGLE + BATCH (cached)
+# 1. YFINANCE
 # ═══════════════════════════════════════════════════════════════
 @st.cache_data(ttl=300, show_spinner=False)
 def _get_closing(ticker: str):
-    """Closing terakhir untuk 1 ticker."""
     t = ticker if ticker.endswith(".JK") else f"{ticker}.JK"
     try:
         df = yf.download(t, period="5d", interval="1d", progress=False)
@@ -48,38 +47,7 @@ def _get_closing(ticker: str):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _batch_closing(tickers_tuple: tuple) -> dict:
-    """Batch closing untuk banyak ticker sekaligus."""
-    if not tickers_tuple:
-        return {}
-    syms = [t if t.endswith(".JK") else f"{t}.JK" for t in tickers_tuple]
-    try:
-        df = yf.download(
-            syms if len(syms) > 1 else syms[0],
-            period="5d", interval="1d",
-            progress=False, group_by="ticker",
-        )
-        if df is None or df.empty:
-            return {t: None for t in tickers_tuple}
-
-        result = {}
-        for t, s in zip(tickers_tuple, syms):
-            try:
-                if len(tickers_tuple) == 1:
-                    close = df["Close"].dropna()
-                else:
-                    close = df[s]["Close"].dropna()
-                result[t] = float(close.iloc[-1]) if not close.empty else None
-            except Exception:
-                result[t] = None
-        return result
-    except Exception:
-        return {t: None for t in tickers_tuple}
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _get_close_history(ticker: str, days: int = 90) -> dict:
-    """Return {date_str: close} untuk 90 hari terakhir."""
+def _get_close_history(ticker: str, days: int = 180) -> dict:
     t = ticker if ticker.endswith(".JK") else f"{ticker}.JK"
     try:
         df = yf.download(t, period=f"{days}d", interval="1d", progress=False)
@@ -100,7 +68,7 @@ def _get_close_history(ticker: str, days: int = 90) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 2. AGGREGATION HELPERS
+# 2. HELPERS
 # ═══════════════════════════════════════════════════════════════
 def _safe_json_loads(s):
     try:
@@ -109,52 +77,47 @@ def _safe_json_loads(s):
         return []
 
 
-def _aggregate_brokers(history: list) -> dict:
-    """Gabungin top_buyers + top_sellers dari SEMUA entry history."""
-    agg: dict = {}
+def _get_latest_snapshot(history: list):
+    """Ambil entry upload paling baru."""
+    if not history:
+        return None
+    return sorted(history, key=lambda r: str(r.get("upload_date", "")), reverse=True)[0]
+
+
+def _build_rows_from_snapshot(snapshot: dict, closing: float) -> list:
+    """Hitung floating dari SATU snapshot saja."""
+    if not snapshot:
+        return []
+
+    brokers: dict = {}
 
     def _ensure(code):
-        if code not in agg:
-            agg[code] = {"akum_lot": 0.0, "akum_val": 0.0,
-                         "dist_lot": 0.0, "dist_val": 0.0}
+        if code not in brokers:
+            brokers[code] = {"akum_lot": 0.0, "akum_val": 0.0,
+                             "dist_lot": 0.0, "dist_val": 0.0}
 
-    for h in history:
-        for b in _safe_json_loads(h.get("top_buyers")):
-            if not isinstance(b, dict):
-                continue
-            code = str(b.get("broker", "")).strip().upper()
-            if not code:
-                continue
-            _ensure(code)
-            agg[code]["akum_lot"] += float(b.get("volume_lot", 0) or 0)
-            agg[code]["akum_val"] += float(b.get("value_idr", 0) or 0)
+    for b in _safe_json_loads(snapshot.get("top_buyers")):
+        if not isinstance(b, dict):
+            continue
+        code = str(b.get("broker", "")).strip().upper()
+        if not code:
+            continue
+        _ensure(code)
+        brokers[code]["akum_lot"] += float(b.get("volume_lot", 0) or 0)
+        brokers[code]["akum_val"] += float(b.get("value_idr", 0) or 0)
 
-        for s in _safe_json_loads(h.get("top_sellers")):
-            if not isinstance(s, dict):
-                continue
-            code = str(s.get("broker", "")).strip().upper()
-            if not code:
-                continue
-            _ensure(code)
-            agg[code]["dist_lot"] += float(s.get("volume_lot", 0) or 0)
-            agg[code]["dist_val"] += float(s.get("value_idr", 0) or 0)
+    for s in _safe_json_loads(snapshot.get("top_sellers")):
+        if not isinstance(s, dict):
+            continue
+        code = str(s.get("broker", "")).strip().upper()
+        if not code:
+            continue
+        _ensure(code)
+        brokers[code]["dist_lot"] += float(s.get("volume_lot", 0) or 0)
+        brokers[code]["dist_val"] += float(s.get("value_idr", 0) or 0)
 
-    return agg
-
-
-def _aggregate_until_date(history: list, cutoff_date: str) -> dict:
-    """Agregasi hanya dari entry dengan upload_date <= cutoff_date."""
-    filtered = [
-        h for h in history
-        if str(h.get("upload_date", ""))[:10] <= cutoff_date
-    ]
-    return _aggregate_brokers(filtered)
-
-
-def _build_rows(agg: dict, closing: float) -> list:
-    """Hitung floating per broker dari hasil agregasi."""
     rows = []
-    for code, d in agg.items():
+    for code, d in brokers.items():
         akum, dist = d["akum_lot"], d["dist_lot"]
         avg_buy = d["akum_val"] / (akum * 100) if akum > 0 else 0.0
         avg_sell = d["dist_val"] / (dist * 100) if dist > 0 else 0.0
@@ -217,7 +180,6 @@ def _fmt_lot(v: int) -> str:
 # 4. TABLE RENDERER
 # ═══════════════════════════════════════════════════════════════
 def _render_broker_table(rows: list, title: str, accent_color: str):
-    """Render 1 tabel broker dengan header + rows."""
     if not rows:
         st.caption(f"(Tidak ada {title.lower()})")
         return
@@ -276,15 +238,21 @@ def _render_broker_table(rows: list, title: str, accent_color: str):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 5. FEATURE 1: ALERT BROKER BARU
+# 5. FRESH BROKER ALERT
 # ═══════════════════════════════════════════════════════════════
 def _get_fresh_brokers(history: list) -> dict:
-    """Bandingkan top buyer/seller entry terbaru vs sebelumnya."""
     if len(history) < 2:
-        return {"buyers": [], "sellers": []}
+        return {"buyers": [], "sellers": [], "gap_days": 0}
 
     sorted_h = sorted(history, key=lambda r: str(r.get("upload_date", "")), reverse=True)
     latest, prev = sorted_h[0], sorted_h[1]
+
+    try:
+        d1 = datetime.strptime(str(latest.get("upload_date", ""))[:10], "%Y-%m-%d")
+        d2 = datetime.strptime(str(prev.get("upload_date", ""))[:10], "%Y-%m-%d")
+        gap_days = (d1 - d2).days
+    except Exception:
+        gap_days = 0
 
     latest_buyers = {str(b.get("broker", "")).upper()
                      for b in _safe_json_loads(latest.get("top_buyers"))
@@ -303,14 +271,27 @@ def _get_fresh_brokers(history: list) -> dict:
     return {
         "buyers": sorted(latest_buyers - prev_buyers),
         "sellers": sorted(latest_sellers - prev_sellers),
+        "gap_days": gap_days,
     }
 
 
 def _render_fresh_alert(history: list):
-    """Banner: broker baru masuk top 10 hari ini."""
     fresh = _get_fresh_brokers(history)
     new_buy = fresh["buyers"]
     new_sell = fresh["sellers"]
+    gap = fresh.get("gap_days", 0)
+
+    if gap > 3:
+        st.markdown(
+            f"<div style='background:#3b2a1a;border-left:3px solid #f59e0b;"
+            f"padding:8px 14px;border-radius:6px;margin-bottom:12px;"
+            f"font-size:12px;color:#fbbf24;'>"
+            f"⚠️ Gap <b>{gap} hari</b> dari upload sebelumnya — "
+            f"fresh broker alert dimatikan biar nggak misleading"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        return
 
     if not new_buy and not new_sell:
         return
@@ -336,10 +317,34 @@ def _render_fresh_alert(history: list):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 6. FEATURE 2: HISTORICAL FLOATING CHART
+# 6. COVERAGE
+# ═══════════════════════════════════════════════════════════════
+def _get_coverage(history: list) -> tuple:
+    if not history:
+        return (0, 0, 0.0)
+    dates = []
+    for h in history:
+        try:
+            d = datetime.strptime(str(h.get("upload_date", ""))[:10], "%Y-%m-%d").date()
+            dates.append(d)
+        except Exception:
+            continue
+    if not dates:
+        return (0, 0, 0.0)
+    first, last = min(dates), max(dates)
+    total_days = (last - first).days + 1
+    biz_days = sum(
+        1 for i in range(total_days)
+        if (first + timedelta(days=i)).weekday() < 5
+    )
+    pct = (len(dates) / biz_days * 100) if biz_days > 0 else 0.0
+    return (len(dates), biz_days, pct)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. HISTORICAL CHART — snapshot per hari (bukan cumulative)
 # ═══════════════════════════════════════════════════════════════
 def _render_historical_chart(ticker: str, history: list):
-    """Chart: floating total per tanggal (cumulative up to date)."""
     if len(history) < 2:
         st.caption("(Butuh ≥2 hari data untuk chart historis)")
         return
@@ -351,14 +356,27 @@ def _render_historical_chart(ticker: str, history: list):
 
     sorted_h = sorted(history, key=lambda r: str(r.get("upload_date", "")))
     dates, fp_buyer, fp_seller, net_flows = [], [], [], []
+    prev_date = None
+    gaps = []
 
     for h in sorted_h:
         d = str(h.get("upload_date", ""))[:10]
+
+        if prev_date:
+            try:
+                delta = (datetime.strptime(d, "%Y-%m-%d")
+                         - datetime.strptime(prev_date, "%Y-%m-%d")).days
+                if delta > 3:
+                    gaps.append(d)
+            except Exception:
+                pass
+        prev_date = d
+
         if d not in close_history:
             continue
 
-        agg = _aggregate_until_date(history, d)
-        rows = _build_rows(agg, close_history[d])
+        # Snapshot PER HARI (bukan cumulative)
+        rows = _build_rows_from_snapshot(h, close_history[d])
 
         total_buyer_fp = sum(r["FLOATING IDR"] for r in rows if r["NET"] > 0)
         total_seller_fp = sum(r["FLOATING IDR"] for r in rows if r["NET"] < 0)
@@ -389,6 +407,10 @@ def _render_historical_chart(ticker: str, history: list):
         marker=dict(size=8),
     ))
 
+    for g in gaps:
+        fig.add_vline(x=g, line_dash="dot",
+                      line_color="#6b7280", opacity=0.5)
+
     fig.update_layout(
         height=320,
         margin=dict(l=10, r=10, t=30, b=10),
@@ -404,13 +426,14 @@ def _render_historical_chart(ticker: str, history: list):
 
     st.plotly_chart(fig, use_container_width=True,
                     config={"displayModeBar": False})
+    st.caption("ℹ️ Chart menampilkan floating **per hari upload** (bukan cumulative)")
 
 
 # ═══════════════════════════════════════════════════════════════
-# 7. MAIN ENTRY POINT
+# 8. MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════
 def render_floating_position(ticker: str, history: list):
-    """Render lengkap: alert, metric, tabel interaktif, chart, verdict."""
+    """Render lengkap: snapshot terbaru only."""
     if not history:
         st.caption("(Belum ada history untuk hitung floating position)")
         return
@@ -420,49 +443,60 @@ def render_floating_position(ticker: str, history: list):
         st.caption("(Harga closing tidak tersedia dari yfinance)")
         return
 
+    # Ambil snapshot terbaru
+    latest = _get_latest_snapshot(history)
+    if not latest:
+        st.caption("(Tidak ada snapshot)")
+        return
+
+    snap_date = str(latest.get("upload_date", ""))[:10]
+
     # Alert broker baru
     _render_fresh_alert(history)
 
-    # Agregasi
-    agg = _aggregate_brokers(history)
-    if not agg:
-        st.caption("(Tidak ada data broker di history)")
+    # Build rows dari snapshot terbaru
+    rows = _build_rows_from_snapshot(latest, closing)
+    if not rows:
+        st.caption("(Tidak ada data broker di snapshot terbaru)")
         return
 
-    rows = _build_rows(agg, closing)
     buyers = [r for r in rows if r["NET"] > 0]
     sellers = [r for r in rows if r["NET"] < 0]
 
-    # ── Metric header (di luar fragment) ──
+    # Metric header
     total_buyer_fp = sum(r["FLOATING IDR"] for r in buyers)
     total_seller_fp = sum(r["FLOATING IDR"] for r in sellers)
+    n_upload, n_biz, cov_pct = _get_coverage(history)
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Closing", f"{closing:,.0f}")
     c2.metric("Akumulator", len(buyers))
     c3.metric("Distributor", len(sellers))
     c4.metric("Net Floating", _fmt_idr(total_buyer_fp + total_seller_fp))
 
-    # ── Tabel interaktif (fragment) ──
+    cov_label = f"{n_upload}/{n_biz}" if n_biz else "—"
+    cov_delta = f"{cov_pct:.0f}%" if n_biz else ""
+    c5.metric("Coverage", cov_label, cov_delta)
+
+    st.caption(f"📸 Snapshot: **{snap_date}** — avg price dihitung dari 1 hari saja (no bias gap)")
+
+    # Tabel interaktif
     _render_floating_tables(ticker, buyers, sellers)
 
-    # ── Chart historis (static) ──
+    # Historical chart
     if len(history) >= 2:
         st.markdown("##### 📈 Historis Floating")
         _render_historical_chart(ticker, history)
 
-    # ── Verdict ──
+    # Verdict
     _render_verdict(buyers, sellers, closing)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 8. FRAGMENT: SELECTBOX + 2 TABEL
+# 9. FRAGMENT
 # ═══════════════════════════════════════════════════════════════
 @_fragment
 def _render_floating_tables(ticker: str, buyers: list, sellers: list):
-    """Bagian interaktif — pakai @st.fragment supaya ganti lot tidak refresh halaman."""
-
-    # Auto-default min lot berdasar volume terbesar di ticker ini
     all_rows = buyers + sellers
     max_vol = max((max(r["AKUM"], r["DIST"]) for r in all_rows), default=0)
 
@@ -505,10 +539,9 @@ def _render_floating_tables(ticker: str, buyers: list, sellers: list):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 9. VERDICT
+# 10. VERDICT
 # ═══════════════════════════════════════════════════════════════
 def _render_verdict(buyers, sellers, closing):
-    """Kesimpulan teks di bawah."""
     if not buyers and not sellers:
         return
 
