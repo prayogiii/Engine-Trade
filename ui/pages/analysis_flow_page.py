@@ -178,12 +178,6 @@ def render_analysis_flow_page(
         target_saham=ticker_raw
     )
 
-    simpan_riwayat(
-        [res_swing['ringkasan'], res_day['ringkasan']],
-        aksi_mode=st.session_state.get('aksi_simpan_mode', 'simpan_baru'),
-        target_saham=ticker_raw
-    )
-
     st.stop()
     if not run_btn:
         return
