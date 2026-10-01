@@ -24,7 +24,7 @@ from config.calendar import hitung_hari_bursa
 # STATISTIK WR
 # ═══════════════════════════════════════════════════════════════
 def hitung_statistik_riwayat_actual(riwayat_actual):
-    """WR v2 — skip data misalign (< 2026-08-18), dedup by id(val)."""
+    """WR v2 — skip misalign (< 2026-08-18), dedup by id(val), skip AVOID."""
     if not riwayat_actual or not isinstance(riwayat_actual, dict):
         return None
 
@@ -49,7 +49,7 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if waktu and waktu < "2026-08-18":
             continue
 
-        # Dedup by id(val) — karena satu val di-map ke 2 key (SW + swing)
+        # Dedup by id(val)
         vid = id(val)
         if vid in seen_ids:
             continue
@@ -71,6 +71,9 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
             elif gaya == "DT":
                 loss_dt += 1
         elif outcome == "Not Touched" or val.get("Entry_Miss") == "Yes":
+            # Skip AVOID — bukan NT asli
+            if val.get("_is_avoid"):
+                continue
             total_not_touched += 1
 
     total_eval = total_win + total_loss
