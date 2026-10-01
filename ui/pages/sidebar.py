@@ -243,7 +243,7 @@ def render_sidebar():
 
         ticker_raw = st.text_input(
             "🔍 Kode Saham",
-            value="BBRI",
+            value="",
             placeholder="Contoh: BBRI, TLKM, BMRI",
             help="Masukkan kode saham IHSG (tanpa suffix .JK)"
         ).upper().strip()
