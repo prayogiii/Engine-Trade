@@ -24,11 +24,11 @@ from config.calendar import hitung_hari_bursa
 # STATISTIK WR
 # ═══════════════════════════════════════════════════════════════
 def hitung_statistik_riwayat_actual(riwayat_actual):
-    """WR v2 — skip data misalign (< 2026-08-18), skip AVOID."""
+    """WR v2 — skip data misalign (< 2026-08-18), dedup by id(val)."""
     if not riwayat_actual or not isinstance(riwayat_actual, dict):
         return None
 
-    seen_keys = set()
+    seen_ids = set()
     total_win = 0
     total_loss = 0
     total_not_touched = 0
@@ -40,7 +40,7 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if not isinstance(val, dict):
             continue
 
-        # Skip data misalign (sebelum kolom Mode ditambahkan)
+        # Skip data misalign
         waktu = ""
         if isinstance(key, tuple) and len(key) >= 1:
             waktu = str(key[0])
@@ -49,15 +49,11 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if waktu and waktu < "2026-08-18":
             continue
 
-        # Dedup pakai key, bukan id()
-        dedup_key = key if isinstance(key, tuple) else (
-            str(val.get("Waktu", "")),
-            str(val.get("Saham", "")),
-            str(val.get("Mode", "")),
-        )
-        if dedup_key in seen_keys:
+        # Dedup by id(val) — karena satu val di-map ke 2 key (SW + swing)
+        vid = id(val)
+        if vid in seen_ids:
             continue
-        seen_keys.add(dedup_key)
+        seen_ids.add(vid)
 
         outcome = val.get("Outcome", "")
         gaya = str(val.get("Mode", "")).upper()
@@ -75,11 +71,6 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
             elif gaya == "DT":
                 loss_dt += 1
         elif outcome == "Not Touched" or val.get("Entry_Miss") == "Yes":
-            # Skip kalau ini AVOID (bukan BUY yang nggak entry)
-            if val.get("Entry_Miss") == "Yes" and not val.get("Outcome"):
-                # Heuristik: Entry_Miss tanpa Outcome = kemungkinan AVOID lama
-                # Cek dari key/val apakah ada sinyal AVOID
-                pass
             total_not_touched += 1
 
     total_eval = total_win + total_loss
