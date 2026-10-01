@@ -541,6 +541,18 @@ def muat_riwayat_actual() -> dict:
             return "DT"
         return val
 
+    # Cross-ref AVOID dari sheet riwayat
+    avoid_set = set()
+    try:
+        riwayat_ws = get_gsheet().worksheet("riwayat")
+        for r in riwayat_ws.get_all_records():
+            if "AVOID" in str(r.get("Sinyal", "")).upper():
+                w = str(r.get("Waktu", ""))[:16]
+                s = str(r.get("Saham", "")).replace(".JK", "").strip().upper()
+                avoid_set.add((w, s))
+    except Exception:
+        pass
+
     try:
         sheet = get_gsheet().worksheet("riwayat_actual")
         records = sheet.get_all_records()
@@ -550,6 +562,11 @@ def muat_riwayat_actual() -> dict:
             raw_gaya = row.get("Mode", "") or row.get("Gaya", "")
             gaya = norm_gaya(raw_gaya) if raw_gaya else ""
 
+            # Cek apakah baris ini AVOID
+            w_key = waktu[:16]
+            s_key = saham.replace(".JK", "").strip().upper()
+            is_avoid = (w_key, s_key) in avoid_set
+
             val = {
                 "Actual_High": str(row.get("Actual_High", "") or "").strip(),
                 "Actual_Low": str(row.get("Actual_Low", "") or "").strip(),
@@ -558,6 +575,7 @@ def muat_riwayat_actual() -> dict:
                 "Entry_Miss": str(row.get("Entry_Miss", "") or "").strip(),
                 "Mode": gaya if gaya else "",
                 "V12_Consumed": str(row.get("V12_Consumed", "No") or "No").strip(),
+                "_is_avoid": is_avoid,
             }
 
             if waktu and saham:
