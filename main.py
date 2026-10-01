@@ -119,7 +119,7 @@ render_sidebar()
 # ═══════════════════════════════════════════════════════════════
 # BACA STATE DARI SIDEBAR
 # ═══════════════════════════════════════════════════════════════
-ticker_input = st.session_state.get('_sb_ticker_input', 'BBRI.JK')
+ticker_input = st.session_state.get('_sb_ticker_input', '')
 harga_manual = st.session_state.get('_sb_harga_manual', '')
 harga_terakhir_manual = st.session_state.get('_sb_harga_terakhir_manual', None)
 sudah_beli = st.session_state.get('_sb_sudah_beli', False)
