@@ -2,9 +2,9 @@
 Riwayat & outcome analysis — pure logic, tanpa Streamlit.
 
 Berisi:
-  - Statistik WR (win rate honest + NT rate)
-  - WR per ticker
-  - Diagnostik WR per bulan / regime / gaya
+  - Statistik WR (win rate honest + NT rate)     [FIXED: konsisten >18 Aug + skip avoid]
+  - WR per ticker                                 [FIXED: ditambah filter >18 Aug + skip avoid]
+  - Diagnostik WR per bulan / regime / gaya       [FIXED: ditambah skip avoid]
   - Dip entry extraction
   - Swing aktif detection
   - Sinyal perlu dicatat (urgent / active)
@@ -21,10 +21,27 @@ from config.calendar import hitung_hari_bursa
 
 
 # ═══════════════════════════════════════════════════════════════
+# KONSTANTA FILTER
+# ═══════════════════════════════════════════════════════════════
+# Data < tanggal ini di-skip karena format kolom misaligned (legacy).
+MIN_VALID_DATE = "2026-08-18"
+
+
+def _is_misaligned(waktu: str) -> bool:
+    """True jika baris ini masuk kategori misaligned (legacy)."""
+    if not waktu:
+        return False
+    return str(waktu) < MIN_VALID_DATE
+
+
+# ═══════════════════════════════════════════════════════════════
 # STATISTIK WR
 # ═══════════════════════════════════════════════════════════════
 def hitung_statistik_riwayat_actual(riwayat_actual):
-    """WR v2 — skip misalign (< 2026-08-18), dedup by id(val), skip AVOID."""
+    """
+    WR v2 — filter >18 Agustus, dedup by id(val), skip AVOID.
+    Return dict statistik lengkap, atau None jika data kosong.
+    """
     if not riwayat_actual or not isinstance(riwayat_actual, dict):
         return None
 
@@ -40,16 +57,20 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if not isinstance(val, dict):
             continue
 
-        # Skip data misalign
+        # ── Skip data misaligned (<18 Agustus) ──
         waktu = ""
         if isinstance(key, tuple) and len(key) >= 1:
             waktu = str(key[0])
         elif isinstance(val, dict):
             waktu = str(val.get("Waktu", ""))
-        if waktu and waktu < "2026-08-18":
+        if waktu and _is_misaligned(waktu):
             continue
 
-        # Dedup by id(val)
+        # ── Skip AVOID (bukan NT asli) ──
+        if val.get("_is_avoid"):
+            continue
+
+        # ── Dedup by id(val) — handle duplikasi key (SW / swing) ──
         vid = id(val)
         if vid in seen_ids:
             continue
@@ -71,9 +92,6 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
             elif gaya == "DT":
                 loss_dt += 1
         elif outcome == "Not Touched" or val.get("Entry_Miss") == "Yes":
-            # Skip AVOID — bukan NT asli
-            if val.get("_is_avoid"):
-                continue
             total_not_touched += 1
 
     total_eval = total_win + total_loss
@@ -105,7 +123,10 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
 
 
 def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
-    """WR khusus untuk 1 ticker."""
+    """
+    WR khusus untuk 1 ticker.
+    FIXED: filter >18 Agustus, dedup, skip AVOID.
+    """
     if not riwayat_actual or not isinstance(riwayat_actual, dict):
         return None
 
@@ -117,6 +138,20 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
         if not isinstance(val, dict):
             continue
 
+        # ── Skip misaligned ──
+        waktu = ""
+        if isinstance(key, tuple) and len(key) >= 1:
+            waktu = str(key[0])
+        elif isinstance(val, dict):
+            waktu = str(val.get("Waktu", ""))
+        if waktu and _is_misaligned(waktu):
+            continue
+
+        # ── Skip AVOID ──
+        if val.get("_is_avoid"):
+            continue
+
+        # ── Filter ticker ──
         saham_key = ""
         if isinstance(key, tuple) and len(key) >= 2:
             saham_key = str(key[1]).replace(".JK", "").upper().strip()
@@ -126,6 +161,7 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
         if saham_key != ticker_clean:
             continue
 
+        # ── Dedup ──
         obj_id = id(val)
         if obj_id in seen_ids:
             continue
@@ -141,7 +177,10 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
 
     total = win + loss
     if total == 0:
-        return {"win": 0, "loss": 0, "total": 0, "win_rate": None, "not_touched": not_touched}
+        return {
+            "win": 0, "loss": 0, "total": 0,
+            "win_rate": None, "not_touched": not_touched,
+        }
 
     return {
         "win": win,
@@ -156,14 +195,18 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
 # DIAGNOSTIK TREND WR
 # ═══════════════════════════════════════════════════════════════
 def diagnose_winrate_trend(riwayat_data, riwayat_actual):
+    """
+    Diagnostik WR per bulan / regime / gaya.
+    FIXED: filter >18 Agustus + skip AVOID.
+    """
     seen_keys = set()
     records = []
 
     for r in riwayat_data:
         waktu = r.get("Waktu", "")
 
-        # Skip data misalign
-        if waktu and waktu < "2026-08-18":
+        # ── Skip misaligned ──
+        if waktu and _is_misaligned(waktu):
             continue
 
         saham = r.get("Saham", "")
@@ -177,6 +220,10 @@ def diagnose_winrate_trend(riwayat_data, riwayat_actual):
             or riwayat_actual.get((waktu, saham))
         )
         if not actual:
+            continue
+
+        # ── Skip AVOID ──
+        if actual.get("_is_avoid"):
             continue
 
         dedup_key = (waktu, saham, gaya)
@@ -197,8 +244,10 @@ def diagnose_winrate_trend(riwayat_data, riwayat_actual):
             "gaya": gaya,
             "regime": regime,
             "saham": saham,
-            "outcome": "NT" if (entry_miss or outcome == "Not Touched")
-                       else (outcome if outcome in ("Win", "Loss") else "kosong"),
+            "outcome": (
+                "NT" if (entry_miss or outcome == "Not Touched")
+                else (outcome if outcome in ("Win", "Loss") else "kosong")
+            ),
         })
 
     per_bulan = defaultdict(lambda: {"win": 0, "loss": 0, "nt": 0})
