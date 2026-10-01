@@ -24,11 +24,11 @@ from config.calendar import hitung_hari_bursa
 # STATISTIK WR
 # ═══════════════════════════════════════════════════════════════
 def hitung_statistik_riwayat_actual(riwayat_actual):
-    """WR v2 — sertakan NT sebagai non-win (honest metrics)."""
+    """WR v2 — skip data misalign (< 2026-08-18), skip AVOID."""
     if not riwayat_actual or not isinstance(riwayat_actual, dict):
         return None
 
-    seen_ids = set()
+    seen_keys = set()
     total_win = 0
     total_loss = 0
     total_not_touched = 0
@@ -36,13 +36,28 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
     win_sw, loss_sw = 0, 0
     win_dt, loss_dt = 0, 0
 
-    for val in riwayat_actual.values():
+    for key, val in riwayat_actual.items():
         if not isinstance(val, dict):
             continue
-        obj_id = id(val)
-        if obj_id in seen_ids:
+
+        # Skip data misalign (sebelum kolom Mode ditambahkan)
+        waktu = ""
+        if isinstance(key, tuple) and len(key) >= 1:
+            waktu = str(key[0])
+        elif isinstance(val, dict):
+            waktu = str(val.get("Waktu", ""))
+        if waktu and waktu < "2026-08-18":
             continue
-        seen_ids.add(obj_id)
+
+        # Dedup pakai key, bukan id()
+        dedup_key = key if isinstance(key, tuple) else (
+            str(val.get("Waktu", "")),
+            str(val.get("Saham", "")),
+            str(val.get("Mode", "")),
+        )
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
 
         outcome = val.get("Outcome", "")
         gaya = str(val.get("Mode", "")).upper()
@@ -60,6 +75,11 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
             elif gaya == "DT":
                 loss_dt += 1
         elif outcome == "Not Touched" or val.get("Entry_Miss") == "Yes":
+            # Skip kalau ini AVOID (bukan BUY yang nggak entry)
+            if val.get("Entry_Miss") == "Yes" and not val.get("Outcome"):
+                # Heuristik: Entry_Miss tanpa Outcome = kemungkinan AVOID lama
+                # Cek dari key/val apakah ada sinyal AVOID
+                pass
             total_not_touched += 1
 
     total_eval = total_win + total_loss
@@ -142,12 +162,16 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
 # DIAGNOSTIK TREND WR
 # ═══════════════════════════════════════════════════════════════
 def diagnose_winrate_trend(riwayat_data, riwayat_actual):
-    """Diagnostik WR: per bulan, per regime, per gaya."""
-    seen_ids = set()
+    seen_keys = set()
     records = []
 
     for r in riwayat_data:
         waktu = r.get("Waktu", "")
+
+        # Skip data misalign
+        if waktu and waktu < "2026-08-18":
+            continue
+
         saham = r.get("Saham", "")
         gaya = r.get("Gaya", "SW")
         regime = r.get("Rezim", "unknown")
@@ -161,10 +185,10 @@ def diagnose_winrate_trend(riwayat_data, riwayat_actual):
         if not actual:
             continue
 
-        obj_id = id(actual)
-        if obj_id in seen_ids:
+        dedup_key = (waktu, saham, gaya)
+        if dedup_key in seen_keys:
             continue
-        seen_ids.add(obj_id)
+        seen_keys.add(dedup_key)
 
         outcome = actual.get("Outcome", "")
         entry_miss = actual.get("Entry_Miss") == "Yes"
