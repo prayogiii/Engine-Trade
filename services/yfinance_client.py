@@ -8,6 +8,11 @@ Sections:
 """
 from __future__ import annotations
 
+import os
+import sys
+import socket
+import subprocess
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -16,10 +21,85 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+# Pastikan folder file ini ada di sys.path, supaya `import idx_bridge` selalu ketemu
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 try:
-    import idx_bridge  # Edge + CDP yang sudah lolos Cloudflare (lihat start_edge.bat)
-except ImportError:
+    import idx_bridge
+except ImportError as e:
     idx_bridge = None
+    print(f"[!] idx_bridge GAGAL di-import: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# BRIDGE HELPERS (Edge + CDP)
+# ═══════════════════════════════════════════════════════════════
+_EDGE_EXE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+_BRIDGE_PORT = 9222
+_IDX_HOME = "https://www.idx.co.id/id/data-pasar/ringkasan-perdagangan/ringkasan-saham/"
+
+
+def _port_open(port: int = _BRIDGE_PORT) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _edge_profile_dir() -> str:
+    """Profil yang sama dengan start_edge.bat / idx_cron.py."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "edge_profile")
+
+
+def ensure_bridge(timeout: int = 30) -> bool:
+    """
+    Pastikan Edge dengan CDP aktif. Kalau belum, coba buka sendiri.
+    Return True kalau port siap dipakai.
+    Catatan: kalau Cloudflare challenge belum lolos, fetch pertama akan 403
+             — buka jendela Edge & klik verifikasi, lalu ulangi.
+    """
+    if idx_bridge is None:
+        print("[!] idx_bridge belum ter-import — tidak bisa pakai bridge.")
+        return False
+    if idx_bridge.available():
+        return True
+
+    print("[*] Port 9222 belum aktif. Membuka Edge...")
+    try:
+        subprocess.Popen([
+            _EDGE_EXE,
+            f"--remote-debugging-port={_BRIDGE_PORT}",
+            f"--user-data-dir={_edge_profile_dir()}",
+            "--no-first-run",
+            _IDX_HOME,
+        ])
+    except Exception as e:
+        print(f"[!] Gagal buka Edge: {e}")
+        return False
+
+    for _ in range(timeout):
+        if _port_open():
+            time.sleep(8)   # beri waktu halaman + challenge selesai
+            return True
+        time.sleep(1)
+
+    print("[!] Timeout menunggu Edge CDP aktif.")
+    return False
+
+
+def _bridge_ready() -> bool:
+    """Cek ringan: bridge ter-import & port aktif. Tidak auto-open Edge."""
+    return idx_bridge is not None and idx_bridge.available()
+
+
+def _bridge_status() -> str:
+    """Alasan bridge tidak siap — untuk pesan error yang jelas."""
+    if idx_bridge is None:
+        return "idx_bridge tidak ter-import (cek folder & sys.path)"
+    if not idx_bridge.available():
+        return "port 9222 tidak aktif (jalankan start_edge.bat / ensure_bridge())"
+    return ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -46,6 +126,7 @@ def load_stock_data(ticker, period="2y", interval="1d"):
 
     return df
 
+
 @st.cache_data(ttl=60)
 def load_ihsg_data(period="2y", interval="1d"):
     try:
@@ -66,6 +147,7 @@ def load_ihsg_data(period="2y", interval="1d"):
         pass
 
     return df
+
 
 @st.cache_data(ttl=30)
 def get_realtime_price(ticker):
@@ -244,23 +326,29 @@ _IDX_SUMMARY_URL = (
 )
 
 
-def _bridge_ready():
-    return idx_bridge is not None and idx_bridge.available()
-
-
 def _idx_get_json(url, timeout=25, use_bridge=True):
     """
     GET JSON dari idx.co.id.
     1) Lewat Edge (CDP) kalau aktif — jalur yang lolos Cloudflare.
     2) Fallback curl_cffi/requests (biasanya 403 selama Cloudflare aktif).
+
+    Pesan error menyertakan ALASAN bridge gagal, supaya tidak bingung lagi
+    kalau lihat "IDX HTTP 403".
     """
     bridge_err = None
-    if use_bridge and _bridge_ready():
-        try:
-            return idx_bridge.fetch_json(url)
-        except idx_bridge.IDXBridgeError as e:
-            bridge_err = e
 
+    if use_bridge:
+        if idx_bridge is None:
+            bridge_err = "idx_bridge tidak ter-import"
+        elif not idx_bridge.available():
+            bridge_err = "port 9222 tidak aktif (Edge CDP belum jalan)"
+        else:
+            try:
+                return idx_bridge.fetch_json(url)
+            except idx_bridge.IDXBridgeError as e:
+                bridge_err = f"bridge aktif tapi gagal: {e}"
+
+    # Fallback (biasanya 403 kalau Cloudflare aktif)
     try:
         from curl_cffi import requests as curl_requests
         r = curl_requests.get(url, headers=_IDX_HEADERS, timeout=timeout, impersonate="chrome120")
@@ -280,8 +368,11 @@ def _idx_get_many(urls):
     if _bridge_ready():
         try:
             return idx_bridge.fetch_json_many(urls)
-        except idx_bridge.IDXBridgeError:
-            pass
+        except idx_bridge.IDXBridgeError as e:
+            # JANGAN ditelan — biar kelihatan kalau Cloudflare expired
+            raise RuntimeError(f"Bridge IDX gagal: {e}") from e
+
+    # Bridge tidak siap → fallback (kemungkinan besar 403)
     out = []
     for u in urls:
         try:
@@ -384,8 +475,6 @@ def _fetch_idx_foreign_flow(ticker, days=30):
             if 0 < fs < 1e8 and close_px > 0:
                 fs *= 100 * close_px
 
-            # pakai tanggal dari data IDX (bukan tanggal yang diminta), supaya kalau
-            # API mengembalikan hari bursa terakhir untuk hari libur, tidak jadi baris palsu
             try:
                 real_date = datetime.strptime(str(it.get("Date") or d_str)[:10], "%Y-%m-%d").date()
             except ValueError:
