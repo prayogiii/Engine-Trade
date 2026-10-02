@@ -2,7 +2,13 @@
 Sidebar QuantRisk Pro — input analysis, scan broksum, riwayat, kalender.
 
 Berisi SATU fungsi publik: render_sidebar().
-Semua helper nested tetap di dalam body-nya supaya konsisten dengan versi lama.
+Di-dekorasi dengan @st.fragment supaya rerun-nya LOKAL:
+  - Ganti dropdown/slider/text/checkbox/radio di sidebar
+    → hanya sidebar yang render ulang, body utama TIDAK.
+  - Klik tombol aksi (Analisis/Scan/AI) → st.rerun() paksa rerun GLOBAL.
+
+Butuh Streamlit >= 1.33 untuk st.fragment. Fallback otomatis ke
+st.experimental_fragment atau no-op kalau tidak tersedia.
 """
 from __future__ import annotations
 
@@ -43,6 +49,23 @@ from ui.components.riwayat_notification import render_notifikasi_evaluasi_riwaya
 # ── UI components ──
 from ui.components.broksum_upload import render_broksum_scan_ui
 
+
+# ═══════════════════════════════════════════════════════════════
+# FRAGMENT DECORATOR (dengan fallback versi lama)
+# ═══════════════════════════════════════════════════════════════
+if hasattr(st, "fragment"):
+    _fragment = st.fragment               # Streamlit >= 1.33
+elif hasattr(st, "experimental_fragment"):
+    _fragment = st.experimental_fragment  # 1.28 – 1.32
+else:
+    def _fragment(fn):                    # fallback: jalan biasa
+        return fn
+
+
+# ═══════════════════════════════════════════════════════════════
+# SIDEBAR (fragment)
+# ═══════════════════════════════════════════════════════════════
+@_fragment
 def render_sidebar():
     with st.sidebar:
         # SIDEBAR CUSTOM STYLING
@@ -251,6 +274,7 @@ def render_sidebar():
             ticker_input = f"{ticker_raw}.JK"
         else:
             ticker_input = ticker_raw
+
         # ── Load Gemini API Key lebih awal (dibutuhkan untuk Scan Broksum di bawah) ──
         def _get_api_key_early():
             """Ambil key pertama dari rotator (untuk status display)."""
@@ -258,8 +282,10 @@ def render_sidebar():
             if keys:
                 return keys[0]
             return ""
+
         if not st.session_state.get("gemini_api_key"):
             st.session_state.gemini_api_key = _get_api_key_early()
+
         # ── Harga Pasar Manual ──
         harga_manual = st.text_input(
             "💵 Harga Pasar (opsional)",
@@ -274,6 +300,7 @@ def render_sidebar():
                 harga_terakhir_manual = None
         else:
             harga_terakhir_manual = None
+
         # ── Status Posisi ──
         sudah_beli = st.checkbox(
             "🟢 Saya sudah punya posisi di saham ini",
@@ -291,12 +318,14 @@ def render_sidebar():
                     harga_beli_float = float(harga_beli_str.replace(",", ""))
                 except:
                     st.error("Format harga beli salah")
+
         # SECTION 2: SCAN BROKSUM (expander)
         with st.expander("📸 Scan Broksum (Gemini AI / OCR)", expanded=False):
             render_broksum_scan_ui(
                 api_key=st.session_state.get("gemini_api_key", ""),
                 key_prefix="sb_broksum"
             )
+
         # SECTION 3: ACTIVE SWING DETECTION
         ticker_clean = ticker_raw.replace(".JK", "").strip().upper()
         dict_active_swings = dapatkan_dict_swing_aktif(
@@ -335,6 +364,7 @@ def render_sidebar():
                 aksi_simpan_mode = "simpan_baru"
 
         st.session_state['aksi_simpan_mode'] = aksi_simpan_mode
+
         # SECTION 4: FEE BROKER (expander)
         with st.expander("⚙️ Fee Broker (Beli & Jual)", expanded=False):
             st.caption("Digunakan untuk hitung nett profit DT & backtest.")
@@ -355,6 +385,10 @@ def render_sidebar():
         # SECTION 5: ACTION BUTTONS
         st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
+        # ═══════════════════════════════════════════════════════
+        # TOMBOL AKSI — WAJIB st.rerun() supaya body utama ikut
+        # render ulang (bukan cuma fragment sidebar).
+        # ═══════════════════════════════════════════════════════
         if st.button(
             "🚀  ANALISIS SEKARANG",
             use_container_width=True,
@@ -369,7 +403,8 @@ def render_sidebar():
             st.session_state['_sb_fee_beli_pct'] = fee_beli_pct
             st.session_state['_sb_fee_jual_pct'] = fee_jual_pct
             st.session_state['_sb_run_btn'] = True
-            st.rerun()
+            st.rerun()   # ← rerun GLOBAL
+
         # CACHE MANAGEMENT
         col_cache1, col_cache2 = st.columns(2)
         with col_cache1:
@@ -440,7 +475,7 @@ def render_sidebar():
             st.session_state['_sb_hide_active_swings'] = hide_active_swings
             st.session_state['_sb_ai_rerank'] = ai_rerank
             st.session_state['_sb_scan_btn'] = True
-            st.rerun()
+            st.rerun()   # ← rerun GLOBAL
 
         # ---------- HELPER RENDER CARD PER MODE (SIDE-BY-SIDE) ----------
         def render_mode_card(r, mode_title, mode_icon, container, idx_key):
@@ -642,6 +677,7 @@ def render_sidebar():
                             ⏳ Outcome belum dicatat · <i>Cek Quick Outcome di atas</i>
                         </div>
                         """, unsafe_allow_html=True)
+
                 # ── Tombol Hapus ──
                 del_key = f"del_{idx_key}_{waktu_key}_{saham_key}_{gaya_key}"
                 if st.button("🗑️ Hapus dari Riwayat",
@@ -658,9 +694,9 @@ def render_sidebar():
                 st.session_state.get('riwayat', []),
                 st.session_state.get('riwayat_actual', {})
             )
-    
+
             st.caption(f"Total records dianalisis: **{diag['total_records']}**")
-        
+
             # ── Per bulan ──
             st.markdown("#### 📅 WR per Bulan")
             bulan_rows = []
@@ -683,15 +719,15 @@ def render_sidebar():
                 })
             if bulan_rows:
                 st.dataframe(pd.DataFrame(bulan_rows), use_container_width=True, hide_index=True)
-            
+
                 # Chart trend
-                chart_data = {r['Bulan']: float(r['WR_Honest%'].replace('%','')) 
+                chart_data = {r['Bulan']: float(r['WR_Honest%'].replace('%',''))
                             for r in bulan_rows}
                 st.line_chart(pd.Series(chart_data), height=200)
                 st.caption("📈 **WR_Honest** = Win / (Win+Loss+NT). Ini yang jujur.")
             else:
                 st.info("Belum cukup data per bulan.")
-        
+
             # ── Per regime ──
             st.markdown("#### 🎯 WR per Regime")
             regime_rows = []
@@ -709,7 +745,7 @@ def render_sidebar():
                 })
             if regime_rows:
                 st.dataframe(pd.DataFrame(regime_rows), use_container_width=True, hide_index=True)
-        
+
             # ── Per gaya ──
             st.markdown("#### 📊 WR per Mode")
             for gaya, d in diag['per_gaya'].items():
@@ -719,6 +755,7 @@ def render_sidebar():
                 wr = d['win'] / total_eval * 100
                 icon = "🟢" if wr >= 55 else ("🟡" if wr >= 45 else "🔴")
                 st.caption(f"{icon} **{gaya}**: {wr:.1f}% ({d['win']}W / {d['loss']}L / {d['nt']}NT)")
+
         st.markdown("""
             <div class="sb-section">
                 <span class="sb-section-icon">📜</span>
@@ -1261,6 +1298,7 @@ def render_sidebar():
                                 ⏳ Outcome belum dicatat · <i>Cek Quick Outcome di atas</i>
                             </div>
                             """, unsafe_allow_html=True)
+
                         ai = r.get("AI_Insight", "").strip()
                         if ai:
                             st.markdown(f"""
@@ -1287,6 +1325,7 @@ def render_sidebar():
                     st.caption(f"❌ Tidak ada hasil untuk '{search_query}'.")
                 else:
                     st.caption("Belum ada riwayat.")
+
         # SECTION 8: AI GEMINI
         st.markdown("""
             <div class="sb-section">
@@ -1335,9 +1374,11 @@ def render_sidebar():
             )
 
         st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
         if st.button("📊 Analisis Riwayat dgn AI", use_container_width=True, key="btn_ai_riwayat"):
             st.session_state['_sb_ai_riwayat_btn'] = True
-            st.rerun()
+            st.rerun()   # ← rerun GLOBAL
+
         if st.button("🗑️ Hapus Semua Riwayat", use_container_width=True, key="btn_hapus_all_riwayat"):
             try:
                 sheet = get_gsheet().worksheet("riwayat")
@@ -1346,6 +1387,7 @@ def render_sidebar():
                 st.success("Riwayat dihapus!")
             except Exception as e:
                 st.error(f"Gagal menghapus riwayat: {e}")
+
         # SECTION 9: KALENDER BURSA
         st.markdown("""
             <div class="sb-section">
@@ -1354,7 +1396,6 @@ def render_sidebar():
             </div>
         """, unsafe_allow_html=True)
 
-        # SESUDAH (main.py):
         now_jkt = datetime.now(pytz.timezone("Asia/Jakarta"))
 
         _level, _msg = status_bursa(now_jkt)
@@ -1372,4 +1413,3 @@ def render_sidebar():
         # FOOTER
         st.markdown("---")
         st.caption("📡 Data dari Yahoo Finance · Bukan rekomendasi investasi")
-
