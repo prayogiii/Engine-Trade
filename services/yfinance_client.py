@@ -327,11 +327,14 @@ _IDX_SUMMARY_URL = (
 
 def _get_bridge_config():
     try:
-        return (
-            st.secrets.get("BRIDGE_URL", "").rstrip("/"),
-            st.secrets.get("BRIDGE_KEY", ""),
-        )
-    except Exception:
+        url = st.secrets.get("BRIDGE_URL", "")
+        key = st.secrets.get("BRIDGE_KEY", "")
+        # Debug sementara — hapus setelah selesai
+        print(f"[DEBUG-BRIDGE] BRIDGE_URL={url!r} BRIDGE_KEY_len={len(key)}")
+        print(f"[DEBUG-BRIDGE] keys di secrets: {list(st.secrets.keys())}")
+        return (url.rstrip("/"), key)
+    except Exception as e:
+        print(f"[DEBUG-BRIDGE] Error baca secrets: {e}")
         return "", ""
 def _idx_get_json(url, timeout=25, use_bridge=True):
     bridge_err = None
