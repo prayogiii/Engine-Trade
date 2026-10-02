@@ -16,6 +16,8 @@ Semua logic bisnis ada di:
   - ui/charts/  → chart renderer
   - ui/components/ → komponen reusable
 """
+import time as _time
+
 import streamlit as st
 
 # ── Services (init Sheets & session) ──
@@ -101,13 +103,32 @@ if "riwayat" not in st.session_state:
 if "riwayat_actual" not in st.session_state:
     st.session_state.riwayat_actual = muat_riwayat_actual()
 
-if "signal_eval_done" not in st.session_state:
+
+# ═══════════════════════════════════════════════════════════════
+# EVALUASI SIGNAL PENDING — time-based (tiap 1 jam), bukan once-per-session
+# ═══════════════════════════════════════════════════════════════
+_last_eval_ts = st.session_state.get("_signal_eval_ts", 0)
+if _time.time() - _last_eval_ts > 3600:      # 1 jam
     try:
-        _eval_result = evaluate_pending_signals(max_eval=30)
+        _eval_result = evaluate_pending_signals(max_eval=100)
         st.session_state.last_eval_result = _eval_result
-        st.session_state.signal_eval_done = True
-    except Exception:
-        st.session_state.signal_eval_done = True
+        st.session_state._signal_eval_ts = _time.time()
+
+        _n = _eval_result.get("evaluated", 0)
+        _c = _eval_result.get("correct", 0)
+        if _n > 0:
+            print(f"[✓] Evaluated {_n} signals, {_c} correct "
+                  f"({_c / _n * 100:.1f}% hit rate)")
+        if _eval_result.get("error"):
+            print(f"[!] Eval error: {_eval_result['error']}")
+        if _eval_result.get("skipped"):
+            print(f"[!] {len(_eval_result['skipped'])} signal di-skip "
+                  f"(lihat log di atas untuk detail)")
+    except Exception as e:
+        import traceback
+        print("[!] evaluate_pending_signals gagal:", e)
+        traceback.print_exc()
+        st.session_state._signal_eval_ts = _time.time()
 
 
 # ═══════════════════════════════════════════════════════════════
