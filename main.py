@@ -4,7 +4,7 @@ QuantRisk Pro — entry point utama.
 File ini adalah orchestrator tipis:
   1. Page config + dark-mode styling
   2. Session state initialization (Sheets)
-  3. Render sidebar
+  3. Render sidebar (FRAGMENT — rerun lokal saja)
   4. Baca input dari sidebar
   5. Dispatch ke halaman: analysis flow / scanner / dashboard / AI riwayat
 
@@ -83,7 +83,7 @@ st.markdown("""
 
 
 # ═══════════════════════════════════════════════════════════════
-# SESSION STATE INIT (Sheets)
+# SESSION STATE INIT (Sheets) — jalan SEKALI per sesi
 # ═══════════════════════════════════════════════════════════════
 if "sheets_initialized" not in st.session_state:
     init_sheets()
@@ -111,7 +111,9 @@ if "signal_eval_done" not in st.session_state:
 
 
 # ═══════════════════════════════════════════════════════════════
-# RENDER SIDEBAR
+# RENDER SIDEBAR — di dalam sidebar.py sudah @st.fragment
+# Sidebar rerun LOKAL saat user ganti dropdown/slider/text.
+# Body utama cuma rerun saat tombol (Analisis/Scan/AI) diklik.
 # ═══════════════════════════════════════════════════════════════
 render_sidebar()
 
@@ -127,6 +129,7 @@ harga_beli_float = st.session_state.get('_sb_harga_beli_float', None)
 fee_beli_pct = st.session_state.get('_sb_fee_beli_pct', 0.15)
 fee_jual_pct = st.session_state.get('_sb_fee_jual_pct', 0.25)
 
+# one-shot flags: True cuma di rerun setelah tombol diklik
 run_btn = st.session_state.pop('_sb_run_btn', False)
 scan_btn = st.session_state.pop('_sb_scan_btn', False)
 ai_riwayat_btn = st.session_state.pop('_sb_ai_riwayat_btn', False)
