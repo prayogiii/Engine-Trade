@@ -325,30 +325,50 @@ _IDX_SUMMARY_URL = (
     "https://www.idx.co.id/primary/TradingSummary/GetStockSummary?length=9999&start=0"
 )
 
-
+def _get_bridge_config():
+    try:
+        return (
+            st.secrets.get("BRIDGE_URL", "").rstrip("/"),
+            st.secrets.get("BRIDGE_KEY", ""),
+        )
+    except Exception:
+        return "", ""
 def _idx_get_json(url, timeout=25, use_bridge=True):
-    """
-    GET JSON dari idx.co.id.
-    1) Lewat Edge (CDP) kalau aktif — jalur yang lolos Cloudflare.
-    2) Fallback curl_cffi/requests (biasanya 403 selama Cloudflare aktif).
-
-    Pesan error menyertakan ALASAN bridge gagal, supaya tidak bingung lagi
-    kalau lihat "IDX HTTP 403".
-    """
     bridge_err = None
+    tunnel_url, tunnel_key = _get_bridge_config()
 
-    if use_bridge:
+    # Jalur 1: tunnel (untuk Streamlit Cloud)
+    if use_bridge and tunnel_url:
+        try:
+            r = requests.get(
+                f"{tunnel_url}/idx",
+                params={"url": url},
+                headers={"X-Api-Key": tunnel_key},
+                timeout=timeout,
+            )
+            if r.status_code == 200:
+                body = r.json()
+                if body.get("ok"):
+                    return body["data"]
+                bridge_err = f"tunnel: {body.get('error', 'unknown')}"
+            else:
+                bridge_err = f"tunnel HTTP {r.status_code}"
+        except Exception as e:
+            bridge_err = f"tunnel unreachable: {e}"
+
+    # Jalur 2: idx_bridge lokal
+    if use_bridge and bridge_err is None:
         if idx_bridge is None:
             bridge_err = "idx_bridge tidak ter-import"
         elif not idx_bridge.available():
-            bridge_err = "port 9222 tidak aktif (Edge CDP belum jalan)"
+            bridge_err = "port 9222 tidak aktif"
         else:
             try:
                 return idx_bridge.fetch_json(url)
             except idx_bridge.IDXBridgeError as e:
                 bridge_err = f"bridge aktif tapi gagal: {e}"
 
-    # Fallback (biasanya 403 kalau Cloudflare aktif)
+    # Jalur 3: fallback
     try:
         from curl_cffi import requests as curl_requests
         r = curl_requests.get(url, headers=_IDX_HEADERS, timeout=timeout, impersonate="chrome120")
@@ -364,15 +384,29 @@ def _idx_get_json(url, timeout=25, use_bridge=True):
 
 
 def _idx_get_many(urls):
-    """Banyak URL, satu sesi Edge. Return list payload (None untuk yang gagal)."""
+    tunnel_url, tunnel_key = _get_bridge_config()
+
+    if tunnel_url:
+        try:
+            r = requests.post(
+                f"{tunnel_url}/idx-many",
+                json={"urls": list(urls)},
+                headers={"X-Api-Key": tunnel_key},
+                timeout=90,
+            )
+            if r.status_code == 200:
+                body = r.json()
+                if body.get("ok"):
+                    return body["data"]
+        except Exception:
+            pass
+
     if _bridge_ready():
         try:
             return idx_bridge.fetch_json_many(urls)
         except idx_bridge.IDXBridgeError as e:
-            # JANGAN ditelan — biar kelihatan kalau Cloudflare expired
             raise RuntimeError(f"Bridge IDX gagal: {e}") from e
 
-    # Bridge tidak siap → fallback (kemungkinan besar 403)
     out = []
     for u in urls:
         try:
@@ -383,10 +417,20 @@ def _idx_get_many(urls):
 
 
 def _extract_items(payload):
-    if isinstance(payload, dict):
-        return payload.get("data") or payload.get("Data") or []
+    """Ekstrak list item dari response IDX. Handle nested data.data."""
     if isinstance(payload, list):
         return payload
+    if isinstance(payload, dict):
+        for key in ("data", "Data", "result", "Result", "results"):
+            v = payload.get(key)
+            if isinstance(v, list):
+                return v
+            if isinstance(v, dict):
+                for key2 in ("data", "Data", "result", "Result", "results"):
+                    v2 = v.get(key2)
+                    if isinstance(v2, list):
+                        return v2
+        return []
     return []
 
 
