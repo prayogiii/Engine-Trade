@@ -32,7 +32,68 @@ from core.bandarmology import (
     parse_broker_list as _parse_broker_list,
 )
 from config.brokers import BROKER_TYPES
-from core.indicators import safe_float# ═══════════════════════════════════════════════════════════════
+from core.indicators import safe_float
+
+
+# ═══════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════
+def _to_float(v, default=0.0):
+    """
+    Parse angka dari Sheets — handle format Indonesia (koma desimal).
+
+    Contoh:
+      "0,02"        → 0.02
+      "1.234,56"    → 1234.56
+      "1,234.56"    → 1234.56
+      "1.234"       → 1234.0   (anggap titik = ribuan)
+      "1234.56"     → 1234.56
+      0.02          → 0.02
+      "" / None     → default
+    """
+    if v is None or v == "":
+        return default
+    if isinstance(v, bool):
+        return float(v)
+    if isinstance(v, (int, float)):
+        return float(v)
+
+    s = str(v).strip()
+    if not s:
+        return default
+
+    has_comma = "," in s
+    has_dot = "." in s
+
+    if has_comma and has_dot:
+        # Format yang lebih umum: titik ribuan, koma desimal
+        # "1.234,56" → 1234.56
+        # Tapi handle juga "1,234.56" (US)
+        # Heuristik: yang muncul terakhir = desimal
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif has_comma:
+        # Cuma koma → koma = desimal
+        # "0,02" → 0.02
+        s = s.replace(",", ".")
+    # else: cuma titik atau tidak ada pemisah → biarkan
+
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
+def _is_evaluated(val) -> bool:
+    """Cek apakah kolom `evaluated` bernilai True, terlepas dari format."""
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().upper() in ("TRUE", "YES", "1", "Y")
+
+
+# ═══════════════════════════════════════════════════════════════
 # KONEKSI
 # ═══════════════════════════════════════════════════════════════
 def get_gsheet():
@@ -415,10 +476,10 @@ def load_foreign_flow_history(ticker, days: int = 30):
             try:
                 rows.append({
                     "date": str(r.get("date", "")),
-                    "close": float(r.get("close", 0) or 0),
-                    "foreign_buy": float(r.get("foreign_buy", 0) or 0),
-                    "foreign_sell": float(r.get("foreign_sell", 0) or 0),
-                    "net_foreign": float(r.get("net_foreign", 0) or 0),
+                    "close": _to_float(r.get("close", 0)),
+                    "foreign_buy": _to_float(r.get("foreign_buy", 0)),
+                    "foreign_sell": _to_float(r.get("foreign_sell", 0)),
+                    "net_foreign": _to_float(r.get("net_foreign", 0)),
                 })
             except Exception:
                 continue
@@ -465,7 +526,6 @@ def simpan_riwayat(ringkasan, aksi_mode="simpan_baru", target_saham=None):
         def _norm_key(rec):
             """Key dedup: Waktu (dipotong ke menit) + Saham + Gaya."""
             waktu = str(rec.get("Waktu", "")).strip()
-            # Potong ke menit: '2026-09-30 20:58:45' → '2026-09-30 20:58'
             if len(waktu) >= 16:
                 waktu = waktu[:16]
             saham = str(rec.get("Saham", "")).replace(".JK", "").strip().upper()
@@ -488,7 +548,6 @@ def simpan_riwayat(ringkasan, aksi_mode="simpan_baru", target_saham=None):
                 if not updated:
                     data.insert(0, ringkasan_bersih)
         else:
-            # ── Mode simpan_baru: cek duplikat by (Waktu_menit, Saham, Gaya) ──
             for item in reversed(items_to_add):
                 ringkasan_bersih = {k: _bersihkan_untuk_json(v) for k, v in item.items()}
                 key_new = _norm_key(ringkasan_bersih)
@@ -541,7 +600,6 @@ def muat_riwayat_actual() -> dict:
             return "DT"
         return val
 
-    # Cross-ref AVOID dari sheet riwayat
     avoid_set = set()
     try:
         riwayat_ws = get_gsheet().worksheet("riwayat")
@@ -562,7 +620,6 @@ def muat_riwayat_actual() -> dict:
             raw_gaya = row.get("Mode", "") or row.get("Gaya", "")
             gaya = norm_gaya(raw_gaya) if raw_gaya else ""
 
-            # Cek apakah baris ini AVOID
             w_key = waktu[:16]
             s_key = saham.replace(".JK", "").strip().upper()
             is_avoid = (w_key, s_key) in avoid_set
@@ -717,7 +774,12 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
 # SIGNAL OUTCOMES
 # ═══════════════════════════════════════════════════════════════
 def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) -> bool:
-    """Simpan setiap signal yang di-generate untuk evaluasi masa depan."""
+    """
+    Simpan setiap signal yang di-generate untuk evaluasi masa depan.
+
+    Catatan: angka ditulis sebagai STRING dengan titik desimal
+    supaya Sheets tidak auto-convert ke format koma (locale Indonesia).
+    """
     try:
         ticker_clean = str(ticker).upper().replace(".JK", "").strip()
         if not ticker_clean:
@@ -745,8 +807,10 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
                     [[
                         datetime.now(pytz.timezone("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S"),
                         ticker_clean, mode, signal, cat, regime,
-                        float(price), int(horizon_days),
-                        int(exp_dir), float(exp_mag),
+                        str(float(price)).replace(",", "."),
+                        int(horizon_days),
+                        int(exp_dir),
+                        str(float(exp_mag)).replace(",", "."),
                     ]],
                     value_input_option="RAW",
                 )
@@ -755,8 +819,10 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
         sheet.append_row([
             datetime.now(pytz.timezone("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S"),
             ticker_clean, mode, signal, cat, regime,
-            float(price), int(horizon_days),
-            int(exp_dir), float(exp_mag),
+            str(float(price)).replace(",", "."),
+            int(horizon_days),
+            int(exp_dir),
+            str(float(exp_mag)).replace(",", "."),
             False, "", "", "", "",
         ], value_input_option="RAW")
         return True
@@ -765,11 +831,7 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
 
 
 def _update_regime_signal_accuracy(ticker, regime, signal_cat, was_correct):
-    """Update akurasi per (regime, signal_category) dengan EMA.
-    
-    CATATAN: Fungsi ini menyentuh st.session_state.v12_memory.
-    Akan dipindah ke core/scoring.py di Phase 4.
-    """
+    """Update akurasi per (regime, signal_category) dengan EMA."""
     import re
     if ticker not in st.session_state.v12_memory:
         st.session_state.v12_memory[ticker] = {
@@ -798,7 +860,6 @@ def _update_regime_signal_accuracy(ticker, regime, signal_cat, was_correct):
     stats["accuracy"] = stats["accuracy"] * (1 - alpha) + hit_val * alpha
     st.session_state.v12_memory[ticker] = mem
 
-    # Global tracker
     if "__global__" not in st.session_state.v12_memory:
         st.session_state.v12_memory["__global__"] = {"regime_signal_accuracy": {}}
     gm = st.session_state.v12_memory["__global__"]
@@ -858,8 +919,15 @@ def get_regime_signal_accuracy(ticker, regime, signal_cat) -> dict:
 
 
 def evaluate_pending_signals(max_eval: int = 50) -> dict:
-    """Evaluasi signal yang sudah lewat horizon. Return dict summary."""
-    result = {"evaluated": 0, "correct": 0, "details": []}
+    """
+    Evaluasi signal yang sudah lewat horizon.
+
+    Perubahan penting:
+      - Pakai `_to_float()` untuk parse angka (handle "0,02" format Indonesia).
+      - Cek `evaluated` fleksibel (bool / "TRUE" / "Yes" / "1").
+      - Error tidak ditelan — di-print ke terminal untuk debugging.
+    """
+    result = {"evaluated": 0, "correct": 0, "details": [], "skipped": []}
     try:
         sheet = get_gsheet().worksheet("signal_outcomes")
         records = sheet.get_all_records()
@@ -869,33 +937,45 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
         now = datetime.now(pytz.timezone("Asia/Jakarta"))
 
         for i, r in enumerate(records):
-            if r.get("evaluated") in (True, "TRUE", "True", "Yes"):
+            if _is_evaluated(r.get("evaluated")):
                 continue
+
+            ticker_str = str(r.get("ticker", "")).strip()
+            mode_str = str(r.get("mode", "")).strip()
+
             try:
                 ts = pd.to_datetime(str(r["timestamp"]))
                 if ts.tzinfo is None:
                     ts = ts.tz_localize("Asia/Jakarta")
-                horizon = int(r["horizon_days"])
+
+                horizon = int(_to_float(r["horizon_days"], 1))
                 eval_time = ts + timedelta(days=int(horizon * 1.5) + 1)
 
                 if now < eval_time:
                     continue
 
-                ticker = str(r["ticker"])
-                price_at_signal = float(r["price_at_signal"])
-                expected_dir = int(r["expected_direction"])
-                expected_mag = float(r["expected_magnitude"])
+                ticker = ticker_str
+                price_at_signal = _to_float(r["price_at_signal"])
+                expected_dir = int(_to_float(r["expected_direction"]))
+                expected_mag = _to_float(r["expected_magnitude"])
+
+                if price_at_signal <= 0:
+                    result["skipped"].append(f"{ticker} {mode_str}: price_at_signal invalid")
+                    continue
 
                 t = f"{ticker}.JK"
                 df = yf.download(t, period="1mo", interval="1d", progress=False)
                 if df is None or df.empty:
+                    result["skipped"].append(f"{ticker} {mode_str}: yfinance empty")
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
                 future = df[df.index >= eval_time.normalize()]
                 if future.empty:
+                    result["skipped"].append(f"{ticker} {mode_str}: no future bar")
                     continue
+
                 price_now = float(future["Close"].iloc[0])
 
                 actual_return = (price_now - price_at_signal) / price_at_signal
@@ -921,25 +1001,35 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                     result["correct"] += 1
                 result["details"].append({
                     "ticker": ticker,
-                    "signal": r["signal"],
-                    "regime": r["regime"],
+                    "signal": r.get("signal", ""),
+                    "regime": r.get("regime", ""),
                     "actual_return": actual_return,
                     "correct": was_correct,
                 })
 
                 _update_regime_signal_accuracy(
-                    ticker, str(r["regime"]),
-                    str(r["signal_category"]), was_correct,
+                    ticker, str(r.get("regime", "")),
+                    str(r.get("signal_category", "")), was_correct,
                 )
 
                 if result["evaluated"] >= max_eval:
                     break
-            except Exception:
+
+            except Exception as e:
+                result["skipped"].append(f"{ticker_str} {mode_str}: {e}")
+                print(f"[!] Eval skip {ticker_str} {mode_str}: {e}")
                 continue
+
+        if result["skipped"]:
+            print(f"[!] {len(result['skipped'])} signal di-skip. Detail:")
+            for s in result["skipped"][:10]:
+                print(f"    - {s}")
 
         return result
     except Exception as e:
         return {**result, "error": str(e)}
+
+
 def update_v12_memory(ticker, factor_signals, actual_return, volatility=0.02):
     """Wrapper — delegasi math ke core.scoring, persist ke Sheets."""
     if ticker not in st.session_state.v12_memory:
@@ -950,6 +1040,8 @@ def update_v12_memory(ticker, factor_signals, actual_return, volatility=0.02):
     new_mem = compute_memory_update_math(mem, factor_signals, actual_return, volatility)
     st.session_state.v12_memory[ticker] = new_mem
     save_v12_memory(st.session_state.v12_memory)
+
+
 # ═══════════════════════════════════════════════════════════════
 # V12 LEARNING INTEGRATION
 # ═══════════════════════════════════════════════════════════════
@@ -990,7 +1082,7 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
                     actual_low_str = actual_data.get('Actual_Low', '')
                     if actual_low_str:
                         try:
-                            actual_low_f = float(str(actual_low_str).replace(",", ""))
+                            actual_low_f = _to_float(actual_low_str)
                             if actual_low_f > entry_high_f:
                                 gap = actual_low_f - entry_high_f
                         except Exception:
@@ -1023,7 +1115,7 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
         actual_close_str = actual_data.get('Actual_Close', '')
         if actual_close_str:
             try:
-                actual_close = float(str(actual_close_str).replace(",", ""))
+                actual_close = _to_float(actual_close_str)
                 last_close = safe_float(last_pred.get('close_price'), 0.0)
                 if last_close > 0:
                     actual_return = (actual_close - last_close) / last_close
@@ -1035,6 +1127,8 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
 
     except Exception as e:
         st.error(f"Gagal integrasi V12: {e}")
+
+
 # ═══════════════════════════════════════════════════════════════
 # BANDARMOLOGY DATA LOADER
 # ═══════════════════════════════════════════════════════════════
