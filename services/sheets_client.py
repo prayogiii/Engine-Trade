@@ -810,7 +810,7 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
                         str(float(price)).replace(",", "."),
                         int(horizon_days),
                         int(exp_dir),
-                        str(float(exp_mag)).replace(",", "."),
+                        str(float(exp_mag)),
                     ]],
                     value_input_option="RAW",
                 )
@@ -822,7 +822,7 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
             str(float(price)).replace(",", "."),
             int(horizon_days),
             int(exp_dir),
-            str(float(exp_mag)).replace(",", "."),
+            str(float(exp_mag)),
             False, "", "", "", "",
         ], value_input_option="RAW")
         return True
@@ -971,7 +971,11 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
-                future = df[df.index >= eval_time.normalize()]
+                eval_date = eval_time.normalize().tz_localize(None)
+                if getattr(df.index, "tz", None) is not None:
+                    df = df.copy()
+                    df.index = df.index.tz_localize(None)
+                future = df[df.index >= eval_date]
                 if future.empty:
                     result["skipped"].append(f"{ticker} {mode_str}: no future bar")
                     continue
