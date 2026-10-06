@@ -916,7 +916,35 @@ def get_regime_signal_accuracy(ticker, regime, signal_cat) -> dict:
         "global_accuracy": global_stats["accuracy"],
         "confidence": min(1.0, total_conf / 2),
     }
+def get_signal_outcomes_stats() -> dict:
+    """Total kumulatif sinyal yang sudah dievaluasi (bukan cuma sesi ini)."""
+    result = {
+        "evaluated": 0,
+        "correct": 0,
+        "by_mode": {
+            "swing": {"total": 0, "correct": 0},
+            "daytrade": {"total": 0, "correct": 0},
+        },
+    }
+    try:
+        ws = get_gsheet().worksheet("signal_outcomes")
+        records = ws.get_all_records()
+        for r in records:
+            if not _is_evaluated(r.get("evaluated")):
+                continue
+            result["evaluated"] += 1
+            correct = _is_evaluated(r.get("was_correct"))
+            if correct:
+                result["correct"] += 1
 
+            mode = str(r.get("mode", "")).strip().lower()
+            if mode in result["by_mode"]:
+                result["by_mode"][mode]["total"] += 1
+                if correct:
+                    result["by_mode"][mode]["correct"] += 1
+        return result
+    except Exception as e:
+        return {**result, "error": str(e)}
 
 def evaluate_pending_signals(max_eval: int = 50) -> dict:
     """
