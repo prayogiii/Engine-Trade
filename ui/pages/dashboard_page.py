@@ -20,12 +20,15 @@ from config.brokers import get_broker_label
 from core.bandarmology import klasifikasi_broker
 from core.riwayat import hitung_statistik_riwayat_actual
 from services.yfinance_client import load_ihsg_data
-from services.sheets_client import get_broksum_cache
+from services.sheets_client import get_broksum_cache, get_signal_outcomes_stats
 
 
 # ═══════════════════════════════════════════════════════════════
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_signal_stats():
+    return get_signal_outcomes_stats()
 def render_dashboard_page():
     """Render halaman awal (sebelum analisis / scan)."""
     # HERO SECTION
@@ -237,14 +240,34 @@ def render_dashboard_page():
             "akan divalidasi terhadap harga aktual → mengupdate accuracy tracker. "
             "Setelah 10+ sample per kombinasi, filter PART 4 mulai aktif otomatis."
         )
-        if st.session_state.get('last_eval_result'):
-            lr = st.session_state.last_eval_result
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Signals Evaluated", lr.get('evaluated', 0))
-            c2.metric("Correct", lr.get('correct', 0))
-            if lr.get('evaluated', 0) > 0:
-                acc = lr['correct'] / lr['evaluated'] * 100
-                c3.metric("Accuracy", f"{acc:.1f}%")
+        try:
+            stats = _cached_signal_stats()
+        except Exception as e:
+            stats = {"evaluated": 0, "correct": 0, "error": str(e)}
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Signals Evaluated", stats.get("evaluated", 0))
+        c2.metric("Correct", stats.get("correct", 0))
+        if stats.get("evaluated", 0) > 0:
+            acc = stats["correct"] / stats["evaluated"] * 100
+            c3.metric("Accuracy", f"{acc:.1f}%")
+            # Breakdown per mode
+            bm = stats.get("by_mode", {})
+            sw = bm.get("swing", {"total": 0, "correct": 0})
+            dt = bm.get("daytrade", {"total": 0, "correct": 0})
+            if sw["total"] or dt["total"]:
+                st.caption(
+                    f"📆 Swing: {sw['correct']}/{sw['total']} · "
+                    f"⏱️ Daytrade: {dt['correct']}/{dt['total']}"
+                )
+
+        # Info run evaluator di sesi ini (kalau ada)
+        lr = st.session_state.get('last_eval_result')
+        if lr and lr.get('evaluated', 0) > 0:
+            st.caption(
+                f"🔄 Sesi ini: {lr['evaluated']} sinyal baru dievaluasi, "
+                f"{lr['correct']} benar."
+            )
 
         st.markdown("---")
         st.markdown("**🎯 Accuracy Matrix (Regime × Signal Type)**")
