@@ -310,12 +310,44 @@ def render_dashboard_page():
         else:
             st.caption("Belum cukup data. Butuh minimal 3 evaluasi per kombinasi regime × signal.")
 
-        st.markdown("---")
-        st.info(
-            "💡 **Cara baca:** Kalau **AVOID_BEARISH di regime Panic Sell** akurasinya "
-            "**< 40%**, artinya sinyal AVOID sering salah di regime itu → "
-            "engine otomatis akan longgarkan AVOID di regime tersebut ke depannya."
-        )
+        # Ganti st.info(...) yang lama jadi ini:
+        if matrix_data:
+            # Cari yang akurasinya paling rendah & sample cukup
+            low_candidates = [
+                d for d in matrix_data
+                if d['Total'] >= 5 and float(d['Accuracy'].rstrip('%')) < 40
+            ]
+            high_candidates = [
+                d for d in matrix_data
+                if d['Total'] >= 5 and float(d['Accuracy'].rstrip('%')) >= 60
+            ]
+
+            if low_candidates:
+                worst = min(low_candidates, key=lambda d: float(d['Accuracy'].rstrip('%')))
+                st.warning(
+                    f"⚠️ **{worst['Signal']}** di regime **{worst['Regime']}** "
+                    f"akurasinya cuma **{worst['Accuracy']}** "
+                    f"({worst['Hits']}/{worst['Total']}) → engine akan longgarkan "
+                    f"sinyal ini di regime tersebut ke depannya."
+                )
+            elif high_candidates:
+                best = max(high_candidates, key=lambda d: float(d['Accuracy'].rstrip('%')))
+                st.success(
+                    f"✅ **{best['Signal']}** di regime **{best['Regime']}** "
+                    f"akurasinya **{best['Accuracy']}** "
+                    f"({best['Hits']}/{best['Total']}) → engine makin percaya sinyal ini."
+                )
+            else:
+                st.info(
+                    "💡 Belum ada kombinasi regime × signal dengan sample cukup "
+                    "(≥ 5 evaluasi) untuk dianalisis. Terus kumpulkan data — "
+                    "setelah cukup, rekomendasi akan muncul di sini secara otomatis."
+                )
+        else:
+            st.info(
+                "💡 Belum cukup data. Butuh minimal 3 evaluasi per kombinasi "
+                "regime × signal type untuk ditampilkan di tabel di atas."
+            )
     # QUICK START
     st.markdown('<div style="height: 32px;"></div>', unsafe_allow_html=True)
     st.markdown("""
