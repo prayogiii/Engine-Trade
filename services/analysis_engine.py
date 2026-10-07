@@ -112,8 +112,11 @@ def compute_regime_and_beta(df, df_ihsg, returns, adx_threshold, mom_median_th):
     }
 
 
-def compute_atr_rsi(df, harga_terakhir_asli, is_daytrade, actual_interval, bars_per_day_map):
-    """Section 9 — ATR & RSI + bars_remaining."""
+def compute_atr_rsi(df, harga_terakhir_asli, is_daytrade, actual_interval, bars_per_day_map, df_daily=None):
+    """Section 9 — ATR & RSI + bars_remaining.
+
+    Tambahan: ATR harian (atr14_daily) untuk basis TP daytrade.
+    """
     df['TR'] = pd.concat([
         df['High'] - df['Low'],
         (df['High'] - df['Close'].shift()).abs(),
@@ -121,6 +124,19 @@ def compute_atr_rsi(df, harga_terakhir_asli, is_daytrade, actual_interval, bars_
     ], axis=1).max(axis=1)
     atr14_val = df['TR'].rolling(14).mean().iloc[-1]
     atr_pct = (atr14_val / harga_terakhir_asli) * 100
+
+    # ═══ ATR harian (untuk TP daytrade) ═══
+    atr14_daily = None
+    atr_pct_daily = None
+    if df_daily is not None and len(df_daily) >= 15:
+        dfd = df_daily.copy()
+        dfd['TR'] = pd.concat([
+            dfd['High'] - dfd['Low'],
+            (dfd['High'] - dfd['Close'].shift()).abs(),
+            (dfd['Low'] - dfd['Close'].shift()).abs(),
+        ], axis=1).max(axis=1)
+        atr14_daily = dfd['TR'].rolling(14).mean().iloc[-1]
+        atr_pct_daily = (atr14_daily / harga_terakhir_asli) * 100
 
     now_jkt = datetime.now(pytz.timezone("Asia/Jakarta"))
     if is_daytrade:
@@ -141,7 +157,9 @@ def compute_atr_rsi(df, harga_terakhir_asli, is_daytrade, actual_interval, bars_
     return {
         "df": df,
         "atr14_val": atr14_val,
+        "atr14_daily": atr14_daily,
         "atr_pct": atr_pct,
+        "atr_pct_daily": atr_pct_daily,
         "rsi14": rsi14,
         "bars_remaining": bars_remaining,
     }
