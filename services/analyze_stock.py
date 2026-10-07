@@ -293,9 +293,9 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         if tp_low > tp_high:
             tp_low, tp_high = tp_high, tp_low
 
-    # Basis pakai entry_low — konsisten dengan cara TP dihitung
-    tp_pct_low = (tp_low - entry_low) / entry_low * 100
-    tp_pct_high = (tp_high - entry_low) / entry_low * 100
+    # Basis pakai entry_low_f (yang sudah dibulatkan tick) — biar persen konsisten dengan harga di UI
+    tp_pct_low = (tp_low - entry_low_f) / entry_low_f * 100
+    tp_pct_high = (tp_high - entry_low_f) / entry_low_f * 100
 
     # ═══ FILTER DT: potensi TP harus ≥ 3% ═══
     DT_MIN_TARGET_PCT = 3.0
