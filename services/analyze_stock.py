@@ -208,12 +208,22 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     if rsi14 > 70 or rsi14 < 30:
         sl_mult = 1.5
 
-    tp_mult_low = 1.5
-    tp_mult_high = 2.5
-    if adx > 30 and 30 < rsi14 < 70:
-        tp_mult_low, tp_mult_high = 2.0, 3.0
-    elif adx < 20:
-        tp_mult_low, tp_mult_high = 1.2, 1.8
+    if is_daytrade:
+        # ATR daily = range (high-low) harian, bukan directional move.
+        # Untuk 1 sesi, directional move biasanya 40-60% dari range harian.
+        tp_mult_low = 0.5
+        tp_mult_high = 0.9
+        if adx > 30 and 30 < rsi14 < 70:
+            tp_mult_low, tp_mult_high = 0.7, 1.1
+        elif adx < 20:
+            tp_mult_low, tp_mult_high = 0.4, 0.7
+    else:
+        tp_mult_low = 1.5
+        tp_mult_high = 2.5
+        if adx > 30 and 30 < rsi14 < 70:
+            tp_mult_low, tp_mult_high = 2.0, 3.0
+        elif adx < 20:
+            tp_mult_low, tp_mult_high = 1.2, 1.8
 
     if is_daytrade:
         base_sl_dist = harga_terakhir * 0.04 * sl_mult
@@ -243,6 +253,12 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
 
         tp_low_raw = entry_low + (tp_mult_low * atr_tp_base)
         tp_high_raw = entry_low + (tp_mult_high * atr_tp_base)
+
+        # Cap TP DT — saham super volatil jangan sampai TP > 8%/12%
+        MAX_TP_LOW_PCT = 0.08
+        MAX_TP_HIGH_PCT = 0.12
+        tp_low_raw = min(tp_low_raw, entry_low * (1 + MAX_TP_LOW_PCT))
+        tp_high_raw = min(tp_high_raw, entry_low * (1 + MAX_TP_HIGH_PCT))
 
         # 2. Safety Floor untuk Memastikan Cover Fee Broker (Beli + Jual) + Target Net Profit Margin (+0.6% net)
         total_fee_pct = (fee_beli_pct + fee_jual_pct) / 100.0
