@@ -119,10 +119,16 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     ihsg_ret = _rb["ihsg_ret"]
 
     # 9. ATR & RSI
-    _atr = compute_atr_rsi(df, harga_terakhir_asli, is_daytrade, actual_interval, bars_per_day_map)
+    _atr = compute_atr_rsi(
+        df, harga_terakhir_asli, is_daytrade,
+        actual_interval, bars_per_day_map,
+        df_daily=df_daily,
+    )
     df = _atr["df"]
     atr14_val = _atr["atr14_val"]
+    atr14_daily = _atr["atr14_daily"]
     atr_pct = _atr["atr_pct"]
+    atr_pct_daily = _atr["atr_pct_daily"]
     rsi14 = _atr["rsi14"]
     bars_remaining = _atr["bars_remaining"]
 
@@ -226,10 +232,17 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     sl_pct = (harga_terakhir - sl_harga) / harga_terakhir * 100
 
     if is_daytrade:
-        # --- PERHITUNGAN TP DAYTRADE BERBASIS ATR INTRADAY & FAKTOR FEE BROKER ---
-        # 1. Target ATR Intraday (5m)
-        tp_low_raw = entry_low + (tp_mult_low * atr14_val)
-        tp_high_raw = entry_low + (tp_mult_high * atr14_val)
+        # --- PERHITUNGAN TP DAYTRADE BERBASIS ATR HARIAN & FAKTOR FEE BROKER ---
+        # 1. Target ATR HARIAN (df_daily), bukan ATR 5m
+        if atr14_daily is not None and atr14_daily > 0:
+            atr_tp_base = atr14_daily
+        else:
+            # Fallback: scale ATR intraday ke estimasi harian
+            _bars_per_day = bars_per_day_map.get(actual_interval, 54)
+            atr_tp_base = atr14_val * (_bars_per_day ** 0.5)
+
+        tp_low_raw = entry_low + (tp_mult_low * atr_tp_base)
+        tp_high_raw = entry_low + (tp_mult_high * atr_tp_base)
 
         # 2. Safety Floor untuk Memastikan Cover Fee Broker (Beli + Jual) + Target Net Profit Margin (+0.6% net)
         total_fee_pct = (fee_beli_pct + fee_jual_pct) / 100.0
@@ -264,8 +277,23 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         if tp_low > tp_high:
             tp_low, tp_high = tp_high, tp_low
 
-    tp_pct_low = (tp_low - harga_terakhir) / harga_terakhir * 100
-    tp_pct_high = (tp_high - harga_terakhir) / harga_terakhir * 100
+    # Basis pakai entry_low — konsisten dengan cara TP dihitung
+    tp_pct_low = (tp_low - entry_low) / entry_low * 100
+    tp_pct_high = (tp_high - entry_low) / entry_low * 100
+
+    # ═══ FILTER DT: potensi TP harus ≥ 3% ═══
+    DT_MIN_TARGET_PCT = 3.0
+    signal_original = signal
+    signal_downgrade_reason = ""
+
+    if is_daytrade and ("STRONG BUY" in signal or "BUY" in signal):
+        if tp_pct_low < DT_MIN_TARGET_PCT:
+            signal = "⏸️ HOLD / WAIT (Potensi DT < 3%)"
+            signal_downgrade_reason = (
+                f"Sinyal asli: {signal_original}. "
+                f"Potensi TP cuma {tp_pct_low:.1f}% "
+                f"(butuh ≥ {DT_MIN_TARGET_PCT}% untuk DT layak)."
+            )
 
     risk = harga_terakhir - sl_harga
     reward = tp_low - harga_terakhir
@@ -626,7 +654,9 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         "Gaya": "DT" if is_daytrade else "SW",
         "Status_Posisi": "Sudah Beli" if sudah_beli else "Belum",
         "Harga_Beli": f"{harga_beli_float:,.0f}" if harga_beli_float else "",
-        "Floating_PL": f"{floating_pl_pct:+.2f}%" if floating_pl_pct is not None else ""
+        "Floating_PL": f"{floating_pl_pct:+.2f}%" if floating_pl_pct is not None else "",
+        "Signal_Original": signal_original if signal != signal_original else "",
+        "Downgrade_Reason": signal_downgrade_reason
     }
 
     # 19. KUMPULKAN RESULT
@@ -639,7 +669,6 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         "entry_ideal_f": entry_ideal_f,
         "risk_adjusted_alloc": risk_adjusted_alloc,
         "sl_harga_f": sl_harga_f,
-
         "tp_low_f": tp_low_f,
         "tp_high_f": tp_high_f,
         "rrr": rrr,
@@ -702,7 +731,10 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         "is_marking_close": is_marking_close,
         "is_no_demand": is_no_demand,
         "is_stopping_volume": is_stopping_volume,
-        "vsa_status_text": vsa_status_text
+        "vsa_status_text": vsa_status_text,
+        "signal_original": signal_original,
+        "signal_downgrade_reason": signal_downgrade_reason,
+        "dt_min_target_pct": DT_MIN_TARGET_PCT,
     }
     # Tambahan untuk UI
     result["ticker_info"] = ticker_info
