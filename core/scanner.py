@@ -39,13 +39,15 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         s_ret = np.diff(s_adj) / s_adj[:-1]
         i_ret = np.diff(i_adj) / i_adj[:-1]
 
-        # Beta & IHSG return 5 hari
+        # Beta & IHSG return — blend 5D+20D agar tidak mati saat IHSG flat/sideways
         i_ret5 = (i_adj[iT] - i_adj[iT-5]) / i_adj[iT-5] if iT >= 5 else 0.0
+        i_ret20 = (i_adj[iT] - i_adj[iT-20]) / i_adj[iT-20] if iT >= 20 else i_ret5
+        i_ret_blend = i_ret5 * 0.6 + i_ret20 * 0.4
         common_len = min(len(s_ret), len(i_ret))
         cov = np.cov(s_ret[:common_len], i_ret[:common_len])[0, 1]
         var_i = np.var(i_ret[:common_len])
         beta = (cov / var_i).clip(-3, 3) if var_i > 1e-8 else 1.0
-        beta_norm = np.clip(beta * i_ret5 / 0.05, -1, 1)
+        beta_norm = np.clip(beta * i_ret_blend / 0.05, -1, 1)
 
         # Momentum combo (3/5/10)
         mom3 = (s_adj[sT] - s_adj[sT-3]) / s_adj[sT-3] if sT >= 3 else 0.0
@@ -96,43 +98,47 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         if sigma_price < 1e-6:
             sigma_price = sma20 * 0.02
         z_score_val = float(np.clip((last_price - sma20) / sigma_price, -5.0, 5.0))
-        mr_norm = np.clip(-z_score_val / 0.05, -1, 1)
+        mr_norm = np.clip(-z_score_val / 3.0, -1, 1)  # FIX: /3.0 konsisten dengan analysis_engine
 
-        # RSI
+        # RSI — filter/bonus, BUKAN komponen score (anti double-count dengan MeanRev/ZScore)
         rsi_ch = s_ret[-14:]
         gains = np.mean(rsi_ch[rsi_ch > 0]) if np.any(rsi_ch > 0) else 0.0
         losses = -np.mean(rsi_ch[rsi_ch < 0]) if np.any(rsi_ch < 0) else 1e-6
         rsi_val = 100.0 - (100.0 / (1.0 + gains / (losses + 1e-9)))
-        if rsi_val < 25: rsi_norm = 0.90
-        elif rsi_val < 35: rsi_norm = 0.55
-        elif rsi_val < 45: rsi_norm = 0.20
-        elif rsi_val < 55: rsi_norm = -0.10
-        elif rsi_val < 65: rsi_norm = -0.35
-        elif rsi_val < 75: rsi_norm = -0.55
-        else: rsi_norm = -0.80
+        rsi_bonus   = +0.06 if rsi_val < 25 else 0.0   # extreme oversold — mild boost
+        rsi_penalty = -0.08 if rsi_val > 75 else 0.0   # extreme overbought — mild brake
+        rsi_adj     = rsi_bonus + rsi_penalty
 
         # Volume Surge
         vol_ma20 = np.mean(volumes[-20:]) if len(volumes) >= 20 else volumes[-20:].mean()
         vol5 = np.mean(volumes[-5:]) if len(volumes) >= 5 else 0
         vol_surge = np.clip((vol5 / max(vol_ma20, 1.0) - 1.0), -1, 1)
 
-        # Breakout bonus
+        # Breakout bonus — harus close BENAR-BENAR di atas high20 + volume kuat
         res20 = np.max(highs[-21:-1]) if len(highs) >= 21 else np.max(highs)
-        breakout_bonus = 0.10 if (last_price > res20 * 0.995 and vol_surge > 0.3) else 0.0
+        breakout_bonus = 0.10 if (last_price > res20 and vol_surge > 0.5) else 0.0
 
-        # Tech Score
-        tech_score = (mom_norm*0.30 + copp_norm*0.28 + beta_norm*0.17 +
-                      mr_norm*0.10 + vol_surge*0.08 + rsi_norm*0.07 +
-                      breakout_bonus)
+        # Tech Score — bobot RSI 0.07 dipindah: copp_norm +0.05, vol_surge +0.02
+        tech_score = (mom_norm*0.30 + copp_norm*0.33 + beta_norm*0.17 +
+                      mr_norm*0.10 + vol_surge*0.10 +
+                      breakout_bonus + rsi_adj)
         tech_score = np.clip(tech_score, -1.0, 1.0)
 
-        # Sinyal
-        if tech_score > 0.42: signal = "STRONG BUY ▲▲"
-        elif tech_score > 0.18: signal = "BUY ▲"
-        elif tech_score > 0.05: signal = "WEAK BUY ▲"
-        elif tech_score < -0.42: signal = "STRONG SELL ▼▼"
-        elif tech_score < -0.18: signal = "SELL ▼"
-        else: signal = "NEUTRAL →"
+        # Sinyal — threshold dinamis: lebih ketat saat IHSG bearish (kurangi false positive)
+        _ema20_ihsg = pd.Series(i_adj).ewm(span=20, adjust=False).mean().iloc[-1]
+        _sma20_ihsg = np.mean(i_adj[-20:])
+        risk_on_pre = _ema20_ihsg > _sma20_ihsg and i_ret5 > 0
+        if risk_on_pre:
+            th_strong, th_buy, th_weak = 0.40, 0.15, 0.05   # longgar saat bullish
+        else:
+            th_strong, th_buy, th_weak = 0.50, 0.25, 0.10   # ketat saat bearish/sideways
+
+        if tech_score > th_strong:    signal = "STRONG BUY ▲▲"
+        elif tech_score > th_buy:     signal = "BUY ▲"
+        elif tech_score > th_weak:    signal = "WEAK BUY ▲"
+        elif tech_score < -th_strong: signal = "STRONG SELL ▼▼"
+        elif tech_score < -th_buy:    signal = "SELL ▼"
+        else:                          signal = "NEUTRAL →"
 
         # Regime
         ema20_ihsg = pd.Series(i_adj).ewm(span=20, adjust=False).mean().iloc[-1]
