@@ -211,12 +211,12 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     if is_daytrade:
         # ATR daily = range (high-low) harian, bukan directional move.
         # Untuk 1 sesi, directional move biasanya 40-60% dari range harian.
-        tp_mult_low = 0.5
-        tp_mult_high = 0.9
+        tp_mult_low = 0.35
+        tp_mult_high = 0.65
         if adx > 30 and 30 < rsi14 < 70:
-            tp_mult_low, tp_mult_high = 0.7, 1.1
+            tp_mult_low, tp_mult_high = 0.5, 0.8
         elif adx < 20:
-            tp_mult_low, tp_mult_high = 0.4, 0.7
+            tp_mult_low, tp_mult_high = 0.3, 0.55
     else:
         tp_mult_low = 1.5
         tp_mult_high = 2.5
