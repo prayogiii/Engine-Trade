@@ -111,7 +111,7 @@ def render_notifikasi_evaluasi_riwayat():
                         if entry_miss:
                             outcome = "Not Touched"
                         else:
-                            outcome = c5.selectbox("Outcome", ["", "Win", "Loss", "Not Touched"], format_func=lambda x: "Pilih Outcome" if x=="" else x)
+                            outcome = c5.selectbox("Outcome", ["", "Win", "Loss", "Not Touched", "Suspended"], format_func=lambda x: "Pilih Outcome" if x == "" else x)
 
                         submitted = st.form_submit_button("💾 Simpan Outcome")
                         if submitted:
@@ -186,7 +186,7 @@ def render_notifikasi_evaluasi_riwayat():
                         if entry_miss:
                             outcome = "Not Touched"
                         else:
-                            outcome = c5.selectbox("Outcome", ["", "Win", "Loss", "Not Touched"], format_func=lambda x: "Pilih Outcome" if x=="" else x)
+                            outcome = c5.selectbox("Outcome", ["", "Win", "Loss", "Not Touched", "Suspended"], format_func=lambda x: "Pilih Outcome" if x == "" else x)
 
                         submitted = st.form_submit_button("💾 Simpan Outcome (Early Exit)")
                         if submitted:
