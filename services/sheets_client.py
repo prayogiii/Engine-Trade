@@ -330,7 +330,7 @@ def save_broksum_data(ticker, res_json, source="gemini") -> bool:
             new_row["top_buyers"], new_row["top_sellers"],
             new_row["summary_narrative"], new_row["full_data"], new_row["source"],
         ]
-        ws.append_row(values, value_input_option="RAW")
+        ws.insert_row(values, index=2, value_input_option="RAW")
         return True
     except Exception as e:
         st.error(f"❌ Gagal menyimpan broker flow ke Sheets: {e}")
@@ -450,11 +450,11 @@ def save_foreign_flow_snapshot(ticker) -> bool:
                     and str(r.get("date", "")) == row_data["date"]):
                 return True
 
-        sheet.append_row([
+        sheet.insert_row([
             row_data["ticker"], row_data["date"], row_data["close"],
             row_data["foreign_buy"], row_data["foreign_sell"],
             row_data["net_foreign"], row_data["source"],
-        ], value_input_option="RAW")
+        ], index=2, value_input_option="RAW")
         return True
     except Exception as e:
         st.error(f"❌ Gagal simpan foreign flow snapshot: {e}")
@@ -753,7 +753,7 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
         if row_index:
             sheet.update(f"A{row_index}:H{row_index}", [new_row], value_input_option="RAW")
         else:
-            sheet.append_row(new_row, value_input_option="RAW")
+            sheet.insert_row(new_row, index=2, value_input_option="RAW")
 
         st.session_state.riwayat_actual = muat_riwayat_actual()
 
@@ -763,8 +763,8 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
             if row_index:
                 sheet.update(f"I{row_index}", [["Yes"]], value_input_option="RAW")
             else:
-                last_row = len(sheet.get_all_values())
-                sheet.update(f"I{last_row}", [["Yes"]], value_input_option="RAW")
+                # Row baru ada di index 2 (baru di-insert)
+                sheet.update("I2", [["Yes"]], value_input_option="RAW")
     except Exception as e:
         st.error(f"Gagal menyimpan actual: {e}")
 
@@ -815,7 +815,7 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
                 )
                 return True
 
-        sheet.append_row([
+        sheet.insert_row([
             datetime.now(pytz.timezone("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S"),
             ticker_clean, mode, signal, cat, regime,
             str(float(price)).replace(",", "."),
@@ -823,7 +823,7 @@ def save_signal_outcome(ticker, mode, signal, regime, price, horizon_days=None) 
             int(exp_dir),
             str(float(exp_mag)),
             False, "", "", "", "",
-        ], value_input_option="RAW")
+        ], index=2, value_input_option="RAW")
         return True
     except Exception:
         return False
