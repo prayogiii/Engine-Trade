@@ -91,7 +91,7 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
                 loss_sw += 1
             elif gaya == "DT":
                 loss_dt += 1
-        elif outcome == "Not Touched" or val.get("Entry_Miss") == "Yes":
+        elif outcome in ("Not Touched", "Suspended") or val.get("Entry_Miss") == "Yes":
             total_not_touched += 1
 
     total_eval = total_win + total_loss
@@ -172,7 +172,7 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
             win += 1
         elif outcome == "Loss":
             loss += 1
-        elif outcome == "Not Touched" or val.get("Entry_Miss") == "Yes":
+        elif outcome in ("Not Touched", "Suspended") or val.get("Entry_Miss") == "Yes":
             not_touched += 1
 
     total = win + loss
@@ -245,7 +245,7 @@ def diagnose_winrate_trend(riwayat_data, riwayat_actual):
             "regime": regime,
             "saham": saham,
             "outcome": (
-                "NT" if (entry_miss or outcome == "Not Touched")
+                "NT" if (entry_miss or outcome in ("Not Touched", "Suspended"))
                 else (outcome if outcome in ("Win", "Loss") else "kosong")
             ),
         })
