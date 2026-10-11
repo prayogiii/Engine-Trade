@@ -1169,7 +1169,7 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
         entry_miss = str(actual_data.get('Entry_Miss', '')).strip() == 'Yes'
         outcome_raw = str(actual_data.get('Outcome', '')).strip().upper()
 
-        if entry_miss or outcome_raw == 'NOT TOUCHED':
+        if entry_miss or outcome_raw in ('NOT TOUCHED', 'SUSPENDED'):
             entry_low = last_pred.get('entry_low')
             entry_high = last_pred.get('entry_high')
             if entry_low is not None and entry_high is not None:
