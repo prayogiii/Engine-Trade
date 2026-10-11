@@ -55,7 +55,7 @@ def libur_dalam_n_hari(now_jkt: datetime, days: int = 14) -> list[tuple[datetime
 
 
 def hitung_hari_bursa(start_date, end_date) -> int:
-    """Hitung jumlah hari bursa (Senin–Jumat) antara start_date (eksklusif) dan end_date (inklusif)."""
+    """Hitung jumlah hari bursa (Senin–Jumat, non-libur) antara start_date (eksklusif) dan end_date (inklusif)."""
     if isinstance(start_date, datetime):
         start_date = start_date.date()
     if isinstance(end_date, datetime):
@@ -65,7 +65,27 @@ def hitung_hari_bursa(start_date, end_date) -> int:
     cur = start_date + timedelta(days=1)
     n = 0
     while cur <= end_date:
-        if cur.weekday() < 5:
+        if cur.weekday() < 5 and cur.strftime("%Y-%m-%d") not in LIBUR_BURSA:
             n += 1
         cur += timedelta(days=1)
     return n
+
+
+def tambah_hari_bursa(start, n: int):
+    """
+    Tambah n hari bursa ke `start`.
+    Skip Sabtu/Minggu dan tanggal yang ada di LIBUR_BURSA.
+    Return datetime dengan jam yang sama seperti `start`.
+    """
+    if isinstance(start, str):
+        start = datetime.fromisoformat(start)
+    cur = start
+    added = 0
+    while added < n:
+        cur = cur + timedelta(days=1)
+        if cur.weekday() >= 5:
+            continue
+        if cur.strftime("%Y-%m-%d") in LIBUR_BURSA:
+            continue
+        added += 1
+    return cur
