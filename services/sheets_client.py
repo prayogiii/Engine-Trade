@@ -25,7 +25,7 @@ import yfinance as yf
 from google.oauth2.service_account import Credentials
 
 from core.signal import parse_signal_category as _parse_signal_category
-from config.settings import FACTOR_KEYS, TTL_BROKSUM_CACHE
+from config.settings import FACTOR_KEYS, TTL_BROKSUM_CACHE, SUSPEND_TIMEOUT_BDAYS
 from core.scoring import compute_memory_update_math, compute_entry_error_update
 from core.bandarmology import (
     klasifikasi_broker,
@@ -33,7 +33,6 @@ from core.bandarmology import (
 )
 from config.brokers import BROKER_TYPES
 from core.indicators import safe_float
-
 
 # ═══════════════════════════════════════════════════════════════
 # HELPERS
@@ -921,6 +920,7 @@ def get_signal_outcomes_stats() -> dict:
     result = {
         "evaluated": 0,
         "correct": 0,
+        "suspended": 0,
         "by_mode": {
             "swing": {"total": 0, "correct": 0},
             "daytrade": {"total": 0, "correct": 0},
@@ -932,6 +932,13 @@ def get_signal_outcomes_stats() -> dict:
         for r in records:
             if not _is_evaluated(r.get("evaluated")):
                 continue
+
+            was_correct_raw = str(r.get("was_correct", "")).strip().upper()
+            if was_correct_raw == "SUSPENDED":
+                result["evaluated"] += 1
+                result["suspended"] += 1
+                continue
+
             result["evaluated"] += 1
             correct = _is_evaluated(r.get("was_correct"))
             if correct:
@@ -950,12 +957,17 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
     """
     Evaluasi signal yang sudah lewat horizon.
 
-    Perubahan penting:
-      - Pakai `_to_float()` untuk parse angka (handle "0,02" format Indonesia).
-      - Cek `evaluated` fleksibel (bool / "TRUE" / "Yes" / "1").
-      - Error tidak ditelan — di-print ke terminal untuk debugging.
+    Perubahan:
+      - eval_time pakai hari bursa (tambah_hari_bursa)
+      - timezone handling defensif
+      - batch update (hemat quota Sheets)
+      - guard expected_direction/magnitude kosong
+      - timeout → SUSPENDED (biar tidak nyangkut selamanya)
     """
-    result = {"evaluated": 0, "correct": 0, "details": [], "skipped": []}
+    result = {
+        "evaluated": 0, "correct": 0, "suspended": 0,
+        "details": [], "skipped": [],
+    }
     try:
         sheet = get_gsheet().worksheet("signal_outcomes")
         records = sheet.get_all_records()
@@ -963,6 +975,8 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
             return result
 
         now = datetime.now(pytz.timezone("Asia/Jakarta"))
+        updates = []            # batch update untuk sheet
+        pending_accuracy = []   # batch update V12 memory
 
         for i, r in enumerate(records):
             if _is_evaluated(r.get("evaluated")):
@@ -972,25 +986,41 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
             mode_str = str(r.get("mode", "")).strip()
 
             try:
+                # ─── Parse timestamp ───
                 ts = pd.to_datetime(str(r["timestamp"]))
                 if ts.tzinfo is None:
                     ts = ts.tz_localize("Asia/Jakarta")
 
                 horizon = int(_to_float(r["horizon_days"], 1))
                 eval_time = tambah_hari_bursa(ts, horizon + 1)
+                suspend_timeout = tambah_hari_bursa(
+                    ts, horizon + 1 + SUSPEND_TIMEOUT_BDAYS
+                )
 
                 if now < eval_time:
                     continue
 
-                ticker = ticker_str
-                price_at_signal = _to_float(r["price_at_signal"])
-                expected_dir = int(_to_float(r["expected_direction"]))
-                expected_mag = _to_float(r["expected_magnitude"])
-
-                if price_at_signal <= 0:
-                    result["skipped"].append(f"{ticker} {mode_str}: price_at_signal invalid")
+                # ─── Guard expected_dir/mag kosong ───
+                raw_dir = str(r.get("expected_direction", "")).strip()
+                raw_mag = str(r.get("expected_magnitude", "")).strip()
+                if raw_dir == "" or raw_mag == "":
+                    result["skipped"].append(
+                        f"{ticker_str} {mode_str}: expected_dir/mag kosong"
+                    )
                     continue
 
+                ticker = ticker_str
+                price_at_signal = _to_float(r["price_at_signal"])
+                expected_dir = int(_to_float(raw_dir))
+                expected_mag = _to_float(raw_mag)
+
+                if price_at_signal <= 0:
+                    result["skipped"].append(
+                        f"{ticker} {mode_str}: price_at_signal invalid"
+                    )
+                    continue
+
+                # ─── Fetch harga ───
                 t = f"{ticker}.JK"
                 df = yf.download(t, period="1mo", interval="1d", progress=False)
                 if df is None or df.empty:
@@ -999,17 +1029,41 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
-                eval_date = eval_time.normalize().tz_localize(None)
+                # ─── Normalisasi timezone (defensif) ───
+                eval_date = eval_time.normalize()
+                if getattr(eval_date, "tz", None) is not None:
+                    eval_date = eval_date.tz_localize(None)
+
                 if getattr(df.index, "tz", None) is not None:
                     df = df.copy()
                     df.index = df.index.tz_localize(None)
-                future = df[df.index >= eval_date]
+
+                future = df[df.index.normalize() >= eval_date]
+
+                # ─── Handle: tidak ada bar future ───
                 if future.empty:
-                    result["skipped"].append(f"{ticker} {mode_str}: no future bar")
+                    row_idx = i + 2
+                    if now > suspend_timeout:
+                        # Timeout → tandai SUSPENDED
+                        updates.append({
+                            "range": f"K{row_idx}:O{row_idx}",
+                            "values": [[
+                                True, "", "", "SUSPENDED",
+                                now.strftime("%Y-%m-%d %H:%M:%S"),
+                            ]],
+                        })
+                        result["suspended"] += 1
+                        result["skipped"].append(
+                            f"{ticker} {mode_str}: SUSPENDED (timeout)"
+                        )
+                    else:
+                        result["skipped"].append(
+                            f"{ticker} {mode_str}: no future bar (masih nunggu)"
+                        )
                     continue
 
+                # ─── Hitung actual return ───
                 price_now = float(future["Close"].iloc[0])
-
                 actual_return = (price_now - price_at_signal) / price_at_signal
                 actual_return = max(-1.0, min(1.0, actual_return))
 
@@ -1021,12 +1075,13 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                     was_correct = abs(actual_return) <= expected_mag
 
                 row_idx = i + 2
-                sheet.update(
-                    f"K{row_idx}:O{row_idx}",
-                    [[True, price_now, round(actual_return, 6),
-                      was_correct, now.strftime("%Y-%m-%d %H:%M:%S")]],
-                    value_input_option="RAW",
-                )
+                updates.append({
+                    "range": f"K{row_idx}:O{row_idx}",
+                    "values": [[
+                        True, price_now, round(actual_return, 6),
+                        was_correct, now.strftime("%Y-%m-%d %H:%M:%S"),
+                    ]],
+                })
 
                 result["evaluated"] += 1
                 if was_correct:
@@ -1039,10 +1094,12 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                     "correct": was_correct,
                 })
 
-                _update_regime_signal_accuracy(
-                    ticker, str(r.get("regime", "")),
-                    str(r.get("signal_category", "")), was_correct,
-                )
+                pending_accuracy.append((
+                    ticker,
+                    str(r.get("regime", "")),
+                    str(r.get("signal_category", "")),
+                    was_correct,
+                ))
 
                 if result["evaluated"] >= max_eval:
                     break
@@ -1051,6 +1108,19 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                 result["skipped"].append(f"{ticker_str} {mode_str}: {e}")
                 print(f"[!] Eval skip {ticker_str} {mode_str}: {e}")
                 continue
+
+        # ─── Batch update ke Sheets ───
+        if updates:
+            try:
+                sheet.batch_update(updates, value_input_option="RAW")
+            except Exception as e:
+                print(f"[!] Batch update gagal: {e}")
+
+        # ─── Update V12 memory (bisa batch kalau perlu) ───
+        for ticker_acc, regime_acc, cat_acc, correct_acc in pending_accuracy:
+            _update_regime_signal_accuracy(
+                ticker_acc, regime_acc, cat_acc, correct_acc
+            )
 
         if result["skipped"]:
             print(f"[!] {len(result['skipped'])} signal di-skip. Detail:")
