@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timedelta
-
+from config.calendar import tambah_hari_bursa
 import gspread
 import numpy as np
 import pandas as pd
@@ -977,7 +977,7 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
                     ts = ts.tz_localize("Asia/Jakarta")
 
                 horizon = int(_to_float(r["horizon_days"], 1))
-                eval_time = ts + timedelta(days=int(horizon * 1.5) + 1)
+                eval_time = tambah_hari_bursa(ts, horizon + 1)
 
                 if now < eval_time:
                     continue
