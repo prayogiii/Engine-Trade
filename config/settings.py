@@ -36,3 +36,6 @@ TTL_NEWS = 600
 TTL_IDX_SUMMARY = 1800
 TTL_BROKSUM_CACHE = 1800       # 30 menit
 TTL_STOCK_LIST = 86400         # 1 hari
+# Timeout sebelum sinyal dianggap SUSPENDED (dalam hari bursa)
+# Kalau eval_time sudah lewat + N hari bursa tapi tidak ada bar harga → suspend
+SUSPEND_TIMEOUT_BDAYS = 5
