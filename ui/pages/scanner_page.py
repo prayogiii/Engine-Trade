@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -102,6 +103,23 @@ def _execute_scan(mode_scan: str, likuiditas_min: int):
     top_buys = buy_signals[:10]
     top_sells = sorted(sell_signals, key=lambda x: x['techScore'])[:10]
 
+    # Snapshot kondisi IHSG saat scan dijalankan
+    _i_closes = ihsg_data['Close'].values
+    _iT = len(_i_closes) - 1
+    _i_ema20 = pd.Series(_i_closes).ewm(span=20, adjust=False).mean().iloc[-1]
+    _i_sma20 = float(np.mean(_i_closes[-20:])) if len(_i_closes) >= 20 else float(_i_closes[-1])
+    _i_ret5  = float((_i_closes[_iT] - _i_closes[_iT-5])  / _i_closes[_iT-5])  if _iT >= 5  else 0.0
+    _i_ret20 = float((_i_closes[_iT] - _i_closes[_iT-20]) / _i_closes[_iT-20]) if _iT >= 20 else 0.0
+    _risk_on = _i_ema20 > _i_sma20 and _i_ret5 > 0
+    if not _risk_on and _i_ret5 < -0.03:
+        _ihsg_regime = "Market Panic 🚨"
+    elif _risk_on and _i_ret5 > 0.02:
+        _ihsg_regime = "Market Bullish 📈"
+    elif _risk_on:
+        _ihsg_regime = "Market Sideways ➡️"
+    else:
+        _ihsg_regime = "Market Bearish 🔻"
+
     st.session_state.scan_results = {
         'buy_signals': buy_signals,
         'sell_signals': sell_signals,
@@ -110,6 +128,9 @@ def _execute_scan(mode_scan: str, likuiditas_min: int):
         'total': total,
         'hasil_scan_count': len(hasil_scan),
         'daftar_saham_count': len(daftar_saham),
+        'ihsg_regime': _ihsg_regime,
+        'ihsg_ret5': _i_ret5,
+        'ihsg_ret20': _i_ret20,
     }
     st.rerun()
 
@@ -139,6 +160,24 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
     st.write(f"Mode: {mode_scan} | Likuiditas Min: Rp {likuiditas_min:,.0f}/hari")
     st.markdown(f"✅ **Berhasil scan:** {hasil_scan_count}/{daftar_saham_count} saham")
     st.markdown(f"📈 Kandidat Beli: {len(buy_signals)} | 📉 Kandidat Jual: {len(sell_signals)}")
+
+    # Banner kondisi IHSG saat scan dilakukan
+    ihsg_regime = sr.get('ihsg_regime', '')
+    ihsg_ret5   = sr.get('ihsg_ret5', 0.0)
+    ihsg_ret20  = sr.get('ihsg_ret20', 0.0)
+    if ihsg_regime:
+        _sign5  = f"+{ihsg_ret5*100:.2f}%"  if ihsg_ret5  >= 0 else f"{ihsg_ret5*100:.2f}%"
+        _sign20 = f"+{ihsg_ret20*100:.2f}%" if ihsg_ret20 >= 0 else f"{ihsg_ret20*100:.2f}%"
+        if "Panic" in ihsg_regime:
+            st.error(f"🚨 **Kondisi Market Saat Scan: {ihsg_regime}** | IHSG 5H: {_sign5} | 20H: {_sign20}  \n"
+                     f"Scanner memprioritaskan saham yang naik **lawan arus** IHSG. Hati-hati konfirmasi manual.")
+        elif "Bearish" in ihsg_regime:
+            st.warning(f"🔻 **Kondisi Market Saat Scan: {ihsg_regime}** | IHSG 5H: {_sign5} | 20H: {_sign20}  \n"
+                       f"Saham dengan 🔥 RS Outperform Kuat = yang tahan banting / naik lawan arus — prioritaskan mereka.")
+        elif "Bullish" in ihsg_regime:
+            st.success(f"📈 **Kondisi Market Saat Scan: {ihsg_regime}** | IHSG 5H: {_sign5} | 20H: {_sign20}")
+        else:
+            st.info(f"➡️ **Kondisi Market Saat Scan: {ihsg_regime}** | IHSG 5H: {_sign5} | 20H: {_sign20}")
 
     col_buy, col_sell = st.columns([3, 1])
     with col_buy:
@@ -260,7 +299,17 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
             col1, col2 = st.columns([3, 1])
             with col1:
                 badge = ["🥇", "🥈", "🥉"][idx] if idx < 3 else f"#{rank}"
-                title_text = f"### {badge} {r['ticker']}  —  **{r['signal']}**"
+                stype = r.get('setupType')
+                if not stype:
+                    # Fallback untuk hasil scan yang masih tersimpan di memory session
+                    if r.get('zScore', 0) <= -1.2 or r.get('rsi', 50) <= 38:
+                        stype = "🎯 Oversold Rebound"
+                    elif r.get('rsNorm', 0) >= 0.25 or r.get('rsScore', 0) > 0.02:
+                        stype = "🔥 Strong Leader"
+                    else:
+                        stype = "⚡ Trend Follower"
+                setup_badge = f" &nbsp; `{stype}`"
+                title_text = f"### {badge} {r['ticker']}  —  **{r['signal']}**{setup_badge}"
                 if active_info:
                     title_text += f" &nbsp; ⏳ `[SWING AKTIF - Hari ke-{active_info['b_days']}]`"
                 st.markdown(title_text)
@@ -306,7 +355,20 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
                 ca.metric("RSI-14", f"{r['rsi']:.1f}")
                 cb.metric("Volume Surge", f"{r['volSurge']*100:.0f}%")
                 cc.metric("Z‑Score", f"{r['zScore']:.2f}σ")
-                if r['isCoppockTurningUp']:
+                # RS vs IHSG & Setup Type
+                rs_raw = r.get('rsScore', 0.0)
+                rs_lbl = r.get('rsLabel', '➖ N/A')
+                ca.metric("RS vs IHSG (5D)", f"{rs_raw*100:+.2f}%", help="Outperformance saham vs IHSG 5 hari. Positif = naik lebih dari IHSG atau turun lebih sedikit.")
+                cb.metric("RS Label", rs_lbl)
+                cc.metric("Tipe Setup", stype)
+
+                if stype == "🎯 Oversold Rebound":
+                    st.info("🎯 **Oversold Rebound Play** — Saham diskon ekstrem yang mulai memantul (reversal trigger aktif). Tangkap peluang buy on weakness saat crash.")
+                elif rs_raw > 0.02 and r.get('regime', '') in ("Market Bearish 🔻", "Market Panic 🚨"):
+                    st.success("🔥 **Lawan Arus (Strong Leader)** — Saham naik / tahan banting saat IHSG bearish. Potensi genuine strength!")
+                elif rs_raw < -0.02 and r.get('regime', '') in ("Market Bullish 📈",):
+                    st.warning("⚠️ **Underperform** — Saham ini ketinggalan saat IHSG naik. Waspadai kelemahan tersembunyi.")
+                if r.get('isCoppockTurningUp'):
                     st.info("⚡ **Coppock Turning Up** — Sinyal akumulasi terkuat!")
             st.divider()
 
