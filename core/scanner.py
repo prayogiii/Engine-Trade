@@ -41,6 +41,7 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
 
         # Beta & IHSG return — blend 5D+20D agar tidak mati saat IHSG flat/sideways
         i_ret5 = (i_adj[iT] - i_adj[iT-5]) / i_adj[iT-5] if iT >= 5 else 0.0
+        i_ret10 = (i_adj[iT] - i_adj[iT-10]) / i_adj[iT-10] if iT >= 10 else i_ret5
         i_ret20 = (i_adj[iT] - i_adj[iT-20]) / i_adj[iT-20] if iT >= 20 else i_ret5
         i_ret_blend = i_ret5 * 0.6 + i_ret20 * 0.4
         common_len = min(len(s_ret), len(i_ret))
@@ -48,6 +49,33 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         var_i = np.var(i_ret[:common_len])
         beta = (cov / var_i).clip(-3, 3) if var_i > 1e-8 else 1.0
         beta_norm = np.clip(beta * i_ret_blend / 0.05, -1, 1)
+
+        # Relative Strength vs IHSG — inti dari market-aware scanner
+        # Saham naik saat IHSG turun = SANGAT kuat → bonus besar
+        # Saham turun saat IHSG naik = lemah → penalty
+        # Saham naik bersama IHSG = netral (bisa karena market saja)
+        s_ret5  = (s_adj[sT] - s_adj[sT-5])  / s_adj[sT-5]  if sT >= 5  else 0.0
+        s_ret10 = (s_adj[sT] - s_adj[sT-10]) / s_adj[sT-10] if sT >= 10 else s_ret5
+        rs5  = s_ret5  - i_ret5          # outperformance 5D vs IHSG
+        rs10 = s_ret10 - i_ret10         # outperformance 10D vs IHSG
+        rs_blend = rs5 * 0.65 + rs10 * 0.35
+        # Normalisasi: ±3% outperformance = skor penuh ±1
+        # Saat IHSG crash -4% dan saham +1% → rs=+5% → rs_norm=+1.0 (top candidat)
+        # Saat IHSG crash -4% dan saham -4% → rs=0%  → rs_norm= 0.0 (netral)
+        # Saat IHSG crash -4% dan saham -7% → rs=-3% → rs_norm=-1.0 (buang)
+        rs_norm = float(np.clip(rs_blend / 0.03, -1, 1))
+
+        # Label RS untuk ditampilkan di UI
+        if rs_blend > 0.03:
+            rs_label = "🔥 Outperform Kuat"
+        elif rs_blend > 0.01:
+            rs_label = "✅ Outperform"
+        elif rs_blend > -0.01:
+            rs_label = "➡️ Inline Market"
+        elif rs_blend > -0.03:
+            rs_label = "⚠️ Underperform"
+        else:
+            rs_label = "🔴 Underperform Kuat"
 
         # Momentum combo (3/5/10)
         mom3 = (s_adj[sT] - s_adj[sT-3]) / s_adj[sT-3] if sT >= 3 else 0.0
@@ -118,20 +146,63 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         res20 = np.max(highs[-21:-1]) if len(highs) >= 21 else np.max(highs)
         breakout_bonus = 0.10 if (last_price > res20 and vol_surge > 0.5) else 0.0
 
-        # Tech Score — bobot RSI 0.07 dipindah: copp_norm +0.05, vol_surge +0.02
-        tech_score = (mom_norm*0.30 + copp_norm*0.33 + beta_norm*0.17 +
-                      mr_norm*0.10 + vol_surge*0.10 +
-                      breakout_bonus + rsi_adj)
-        tech_score = np.clip(tech_score, -1.0, 1.0)
+        # Tech Score V14 — Dual Adaptive Scoring (Leader vs Rebound)
+        # 1. Jalur Strong Leader (Trend Following & Outperformer Lawan Arus)
+        # Bobot: mom 0.25 + copp 0.28 + beta 0.15 + mr 0.10 + vol 0.10 + rs 0.12
+        score_leader = (mom_norm*0.25 + copp_norm*0.28 + beta_norm*0.15 +
+                        mr_norm*0.10 + vol_surge*0.10 + rs_norm*0.12 +
+                        breakout_bonus + rsi_adj)
 
-        # Sinyal — threshold dinamis: lebih ketat saat IHSG bearish (kurangi false positive)
+        # 2. Jalur Oversold Rebound (Saham diskon ekstrem yang mulai memantul saat crash)
+        # Kualifikasi: Diskon dalam (Z-Score <= -1.2 atau RSI <= 38) DAN ada sinyal pembalikan (bukan falling knife)
+        is_oversold = (z_score_val <= -1.2) or (rsi_val <= 38.0)
+        has_rebound_trigger = (is_turning_up or copp_rising or s_ret[-1] > 0) and (vol_surge > -0.6)
+
+        if is_oversold and has_rebound_trigger:
+            # Pada saham rebound: RS negatif dimaafkan (tidak kena penalti), bobot Mean Reversion ditingkatkan
+            rs_rebound_boost = max(0.0, rs_norm) * 0.10
+            mom_rebound = max(mom_norm, 0.0) * 0.10  # pinalti momentum masa lalu diredam
+            vol_boost = max(0.0, vol_surge) * 0.12
+            # Rebound kicker jika ada candle reversal hijau hari ini
+            reversal_kicker = 0.08 if s_ret[-1] > 0 else 0.04
+            score_rebound = (mr_norm * 0.32 +
+                             copp_norm * 0.24 +
+                             mom_rebound +
+                             vol_boost +
+                             rs_rebound_boost +
+                             rsi_bonus +
+                             reversal_kicker)
+        else:
+            score_rebound = -1.0
+
+        # Tentukan pemenang setup (Adaptive Selection)
+        if score_rebound > score_leader and is_oversold and has_rebound_trigger:
+            tech_score = score_rebound
+            setup_type = "🎯 Oversold Rebound"
+        else:
+            tech_score = score_leader
+            if rs_norm >= 0.30:
+                setup_type = "🔥 Strong Leader"
+            elif breakout_bonus > 0:
+                setup_type = "🚀 Breakout Play"
+            else:
+                setup_type = "⚡ Trend Follower"
+
+        tech_score = float(np.clip(tech_score, -1.0, 1.0))
+
+        # Sinyal — threshold dinamis:
+        # Saham Rebound di lembah threshold lebih terjangkau, sedangkan saham Leader saat bearish dituntut ketat
         _ema20_ihsg = pd.Series(i_adj).ewm(span=20, adjust=False).mean().iloc[-1]
         _sma20_ihsg = np.mean(i_adj[-20:])
         risk_on_pre = _ema20_ihsg > _sma20_ihsg and i_ret5 > 0
+
         if risk_on_pre:
-            th_strong, th_buy, th_weak = 0.40, 0.15, 0.05   # longgar saat bullish
+            th_strong, th_buy, th_weak = 0.40, 0.15, 0.05   # longgar saat market bullish
         else:
-            th_strong, th_buy, th_weak = 0.50, 0.25, 0.10   # ketat saat bearish/sideways
+            if setup_type == "🎯 Oversold Rebound":
+                th_strong, th_buy, th_weak = 0.45, 0.18, 0.08  # ambang pas untuk saham pantulan dari dasar
+            else:
+                th_strong, th_buy, th_weak = 0.50, 0.25, 0.10  # ketat saat bearish untuk membuang false positive
 
         if tech_score > th_strong:    signal = "STRONG BUY ▲▲"
         elif tech_score > th_buy:     signal = "BUY ▲"
@@ -240,7 +311,12 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
             "entryHigh": entry_high,
             "likuiditas": likuiditas_str,
             "rrr": rrr,
-            "confidence": confidence
+            "confidence": confidence,
+            # Relative Strength vs IHSG & Adaptive Setup Type (V14)
+            "rsScore": rs_blend,       # raw % outperformance vs IHSG
+            "rsNorm": rs_norm,         # normalized -1..1
+            "rsLabel": rs_label,       # label untuk UI
+            "setupType": setup_type,   # tipe setup: Strong Leader, Oversold Rebound, etc.
         }
 
     except Exception:
