@@ -147,21 +147,26 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         breakout_bonus = 0.10 if (last_price > res20 and vol_surge > 0.5) else 0.0
 
         # Tech Score V14 — Dual Adaptive Scoring (Leader vs Rebound)
+        # Netralkan penalti beta saat saham terbukti kuat melawan arus (RS > 0)
+        beta_effective = max(0.0, beta_norm) if rs_norm > 0 else beta_norm
+
+        # Tech Score V15 — Dual Adaptive Scoring (Leader vs Rebound)
         # 1. Jalur Strong Leader (Trend Following & Outperformer Lawan Arus)
         # Bobot: mom 0.25 + copp 0.28 + beta 0.15 + mr 0.10 + vol 0.10 + rs 0.12
-        score_leader = (mom_norm*0.25 + copp_norm*0.28 + beta_norm*0.15 +
+        score_leader = (mom_norm*0.25 + copp_norm*0.28 + beta_effective*0.15 +
                         mr_norm*0.10 + vol_surge*0.10 + rs_norm*0.12 +
                         breakout_bonus + rsi_adj)
 
         # 2. Jalur Oversold Rebound (Saham diskon ekstrem yang mulai memantul saat crash)
-        # Kualifikasi: Diskon dalam (Z-Score <= -1.2 atau RSI <= 38) DAN ada sinyal pembalikan (bukan falling knife)
-        is_oversold = (z_score_val <= -1.2) or (rsi_val <= 38.0)
+        # Syarat KETAT: RSI wajib jenuh jual (<= 42) DAN Z-Score rendah (<= -1.0), atau extreme oversold (RSI <= 32).
+        # Saham dengan RSI > 45 TIDAK BOLEH diklasifikasikan sebagai Oversold Rebound!
+        is_oversold = ((z_score_val <= -1.0 and rsi_val <= 42.0) or (rsi_val <= 32.0)) and (rsi_val < 48.0)
         has_rebound_trigger = (is_turning_up or copp_rising or s_ret[-1] > 0) and (vol_surge > -0.6)
 
         if is_oversold and has_rebound_trigger:
             # Pada saham rebound: RS negatif dimaafkan (tidak kena penalti), bobot Mean Reversion ditingkatkan
             rs_rebound_boost = max(0.0, rs_norm) * 0.10
-            mom_rebound = max(mom_norm, 0.0) * 0.10  # pinalti momentum masa lalu diredam
+            mom_rebound = max(mom_norm, 0.0) * 0.10  # penalti momentum masa lalu diredam
             vol_boost = max(0.0, vol_surge) * 0.12
             # Rebound kicker jika ada candle reversal hijau hari ini
             reversal_kicker = 0.08 if s_ret[-1] > 0 else 0.04
@@ -175,16 +180,23 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         else:
             score_rebound = -1.0
 
-        # Tentukan pemenang setup (Adaptive Selection)
-        if score_rebound > score_leader and is_oversold and has_rebound_trigger:
+        # Hierarki Penentuan Tipe Setup & Scoring (Mutually Exclusive):
+        # A. Strong Leader: Terbukti melawan arus / outperform dengan momentum sehat (RSI >= 46 atau RS tinggi)
+        is_strong_leader = (rs_norm >= 0.25 or rs_blend >= 0.015) and (rsi_val >= 46.0 or last_price > sma20)
+
+        if is_strong_leader:
+            tech_score = score_leader
+            setup_type = "🔥 Strong Leader"
+        elif is_oversold and has_rebound_trigger and score_rebound > score_leader:
             tech_score = score_rebound
             setup_type = "🎯 Oversold Rebound"
+        elif breakout_bonus > 0:
+            tech_score = score_leader
+            setup_type = "🚀 Breakout Play"
         else:
             tech_score = score_leader
-            if rs_norm >= 0.30:
+            if rs_norm >= 0.15:
                 setup_type = "🔥 Strong Leader"
-            elif breakout_bonus > 0:
-                setup_type = "🚀 Breakout Play"
             else:
                 setup_type = "⚡ Trend Follower"
 
@@ -225,9 +237,22 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         else:
             regime = "Market Bearish 🔻"
 
-        # Estimasi return
+        # Estimasi return forward-looking (bukan proyeksi return IHSG masa lalu)
         alpha = np.mean(s_ret) - beta * np.mean(i_ret)
-        mu_est = np.clip(beta * i_ret5 + alpha + mom_combo * 0.15, -0.04, 0.04)
+        if tech_score > 0.05:
+            # Untuk kandidat Beli: estimasi upside berdasarkan alpha, momentum positif, dan volatilitas
+            upside_mom = max(0.0, mom_combo) * 0.25
+            upside_alpha = max(0.0, alpha) * 2.0
+            upside_vol = 0.5 * sigma20
+            # Jika rebound di bawah SMA20, estimasi tarikan balik ke SMA20
+            dist_to_sma = (sma20 - last_price) / max(last_price, 1.0)
+            upside_rebound = min(dist_to_sma * 0.7, 0.08) if (dist_to_sma > 0 and setup_type == "🎯 Oversold Rebound") else 0.0
+            mu_est = float(np.clip(max(0.02, upside_mom + upside_alpha + upside_vol + upside_rebound), 0.015, 0.08))
+        elif tech_score < -0.05:
+            downside_mom = min(0.0, mom_combo) * 0.25
+            mu_est = float(np.clip(-0.02 + downside_mom - 0.5 * sigma20, -0.08, -0.015))
+        else:
+            mu_est = float(np.clip(alpha + mom_combo * 0.10, -0.02, 0.02))
 
         # Bollinger %B
         std20 = np.std(s_adj[-20:])
@@ -248,28 +273,39 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         else:
             trend_consistency = 50.0
 
-        # Entry Zone
-        pivot = (highs[-1] + lows[-1] + closes[-1]) / 3.0
-        s1 = 2 * pivot - highs[-1]
-        entry_low = fraksi_bei(min(s1, last_price * (1 - sigma20)))
+        # Entry Zone — batas bawah pullback wajar (maksimal 1.5% - 2.5% di bawah harga pasar)
+        pivot = (float(highs[-1]) + float(lows[-1]) + float(closes[-1])) / 3.0
+        s1 = 2 * pivot - float(highs[-1])
         entry_high = fraksi_bei(last_price)
+        pullback_target = max(s1, last_price * (1 - 0.5 * sigma20))
+        pullback_floor = last_price * 0.975  # max pullback 2.5%
+        entry_low = fraksi_bei(max(pullback_target, pullback_floor))
         if entry_low >= entry_high:
             step = fraksi_step(last_price)
             entry_low = fraksi_bei(entry_high - step)
 
-        # Take Profit Est
-        tp_dist_pct = max(0.02, max(mu_est, 0.01) + 0.8 * sigma20)
-        tp_est = fraksi_bei(last_price * (1 + tp_dist_pct))
-        if tp_est <= last_price:
-            step = fraksi_step(last_price)
-            tp_est = fraksi_bei(last_price + 2 * step)
-
-        # Stop Loss Est
-        sl_dist_pct = max(0.02, 1.5 * sigma20)
-        sl_est = fraksi_bei(entry_low * (1 - sl_dist_pct))
+        # Stop Loss Est — terukur (3.5% - 5.5% dari harga beli, max 6.5%)
+        # Gunakan kombinasi swing low teknikal dan batas risiko volatilitas
+        recent_low = min(lows[-1], lows[-2]) if len(lows) >= 2 else lows[-1]
+        sl_vol_dist = max(0.035, min(0.055, 1.2 * sigma20))
+        sl_price_raw = min(last_price * (1 - sl_vol_dist), float(recent_low) - fraksi_step(recent_low))
+        sl_price_raw = max(sl_price_raw, last_price * 0.935)  # hard floor: max risk 6.5%
+        sl_est = fraksi_bei(sl_price_raw)
         if sl_est >= entry_low:
             step = fraksi_step(entry_low)
             sl_est = fraksi_bei(entry_low - 2 * step)
+
+        # Take Profit Est — proporsional terhadap risiko (RRR target minimal 1.6 - 2.0)
+        risk_per_share = last_price - sl_est
+        min_reward = risk_per_share * 1.6  # jaminan reward minimal 1.6x risk
+        tp_target_vol = last_price * (1 + max(mu_est, 1.5 * sigma20))
+        tp_res20 = float(res20) if (res20 > last_price * 1.02) else 0.0
+        tp_raw = max(last_price + min_reward, tp_res20 if tp_res20 > 0 else tp_target_vol)
+        tp_raw = min(tp_raw, last_price * 1.15)  # cap rasional swing target
+        tp_est = fraksi_bei(tp_raw)
+        if tp_est <= last_price:
+            step = fraksi_step(last_price)
+            tp_est = fraksi_bei(last_price + 2 * step)
 
         # Likuiditas
         avg_value = np.mean(volumes[-20:] * closes[-20:])
