@@ -302,9 +302,11 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
                 stype = r.get('setupType')
                 if not stype:
                     # Fallback untuk hasil scan yang masih tersimpan di memory session
-                    if r.get('zScore', 0) <= -1.2 or r.get('rsi', 50) <= 38:
+                    if (r.get('rsNorm', 0) >= 0.20 or r.get('rsScore', 0) > 0.015) and r.get('rsi', 50) >= 45:
+                        stype = "🔥 Strong Leader"
+                    elif (r.get('zScore', 0) <= -1.0 and r.get('rsi', 50) <= 42) or r.get('rsi', 50) <= 32:
                         stype = "🎯 Oversold Rebound"
-                    elif r.get('rsNorm', 0) >= 0.25 or r.get('rsScore', 0) > 0.02:
+                    elif r.get('rsNorm', 0) >= 0.10:
                         stype = "🔥 Strong Leader"
                     else:
                         stype = "⚡ Trend Follower"
