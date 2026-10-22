@@ -29,6 +29,7 @@ from services.sheets_client import (
 from services.news_client import (
     get_google_news_rss, get_kontan_news, get_cnbc_rss_news, get_ipot_news,
     filter_relevant, analyze_sentiment_weighted,
+    get_sector_catalyst, get_global_sector_news,
     TRANSLATOR_AVAILABLE, GoogleTranslator,
 )
 
@@ -185,11 +186,19 @@ def load_news_and_sentiment(ticker_raw: str, ticker_info: dict) -> dict:
         ticker_raw, ticker_info=ticker_info,
     )
 
+    # Cek apakah ada katalis sektor / komoditas global
+    catalyst = get_sector_catalyst(ticker_raw, ticker_info)
+    global_news = []
+    if catalyst:
+        global_news = get_global_sector_news(catalyst["label"], catalyst["query"], num=2)
+
+    max_global = min(2, len(global_news))
     TARGET_TOTAL = 5
+    target_local = TARGET_TOTAL - max_global
     MAX_OTHER = 2
 
     other_take = other_news[:MAX_OTHER]
-    google_quota = TARGET_TOTAL - len(other_take)
+    google_quota = max(0, target_local - len(other_take))
     google_take = google_news[:google_quota]
 
     final_news = []
@@ -205,8 +214,14 @@ def load_news_and_sentiment(ticker_raw: str, ticker_info: dict) -> dict:
         if n['title'] not in seen:
             seen.add(n['title'])
             unique_news.append(n)
-        if len(unique_news) >= TARGET_TOTAL:
+        if len(unique_news) >= target_local:
             break
+
+    # Tambahkan berita sektor global
+    for g in global_news[:max_global]:
+        if g['title'] not in seen:
+            seen.add(g['title'])
+            unique_news.append(g)
 
     avg_sentiment = analyze_sentiment_weighted(unique_news, translator_en)
     headlines = [n['title'] for n in unique_news]
