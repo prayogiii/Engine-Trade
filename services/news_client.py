@@ -199,7 +199,7 @@ def filter_relevant(news_list, ticker, ticker_info=None):
 # ═══════════════════════════════════════════════════════════════
 # NEWS SOURCES
 # ═══════════════════════════════════════════════════════════════
-def get_google_news_rss(query_str, num=5, days_back=7):
+def get_google_news_rss(query_str, num=5, days_back=7, lang="id"):
     """Ambil berita dari Google News RSS, FILTER TANGGAL MANUAL."""
     if not RSS_AVAILABLE:
         return [], "RSS tidak tersedia"
@@ -209,10 +209,16 @@ def get_google_news_rss(query_str, num=5, days_back=7):
         cutoff_ts = cutoff_date.timestamp()
 
         query_with_date = f"{query_str} after:{cutoff_str}"
-        url = (
-            f"https://news.google.com/rss/search?"
-            f"q={urllib.parse.quote(query_with_date)}&hl=id&gl=ID&ceid=ID:id"
-        )
+        if lang == "en":
+            url = (
+                f"https://news.google.com/rss/search?"
+                f"q={urllib.parse.quote(query_with_date)}&hl=en-US&gl=US&ceid=US:en"
+            )
+        else:
+            url = (
+                f"https://news.google.com/rss/search?"
+                f"q={urllib.parse.quote(query_with_date)}&hl=id&gl=ID&ceid=ID:id"
+            )
         feed = feedparser.parse(url)   # ← KUNCI: langsung URL, bukan requests.get
 
         news = []
@@ -227,7 +233,7 @@ def get_google_news_rss(query_str, num=5, days_back=7):
 
             news.append({
                 'title': e.get('title', '').strip(),
-                'summary': re.sub('<[^<]+?>', '', e.get('summary', '')),
+                'summary': re.sub('<[^<]+?>', '', e.get('summary', '') or ''),
                 'source': 'Google News',
                 'published': e.get('published', ''),
                 'published_ts': pub_ts
@@ -239,6 +245,125 @@ def get_google_news_rss(query_str, num=5, days_back=7):
         return news[:num], None
     except Exception as e:
         return [], str(e)
+
+
+# ═══════════════════════════════════════════════════════════════
+# GLOBAL SECTOR & COMMODITY CATALYSTS
+# ═══════════════════════════════════════════════════════════════
+SECTOR_CATALYSTS = {
+    "COAL": {
+        "label": "Batubara (Coal)",
+        "tickers": {
+            "ADRO", "PTBA", "ITMG", "BUMI", "INDY", "BYAN", "HRUM",
+            "KKGI", "MBAP", "ABMM", "DSSA", "CUAN", "BSSR", "GEMS", "TOBA", "TEBE"
+        },
+        "query": '("thermal coal" OR "newcastle coal" OR "coal price" OR "coal demand")',
+    },
+    "NICKEL_EV": {
+        "label": "Nikel & Baterai EV",
+        "tickers": {"ANTM", "INCO", "MBMA", "NCKL", "NICL"},
+        "query": '("nickel price" OR "LME nickel" OR "EV battery supply" OR "nickel market")',
+    },
+    "GOLD_COPPER": {
+        "label": "Emas & Tembaga (Gold/Copper)",
+        "tickers": {"MDKA", "BRMS", "PSAB", "AMMN", "ARCI"},
+        "query": '("gold price" OR "spot gold" OR "copper price" OR "LME copper")',
+    },
+    "OIL_GAS": {
+        "label": "Minyak & Gas Bumi (Oil & Gas)",
+        "tickers": {"MEDC", "PGAS", "ENRG", "AKRA", "ELSA", "RAJA", "RUIS"},
+        "query": '("crude oil" OR "brent crude" OR "WTI oil" OR "OPEC" OR "natural gas price")',
+    },
+    "CPO_AGRI": {
+        "label": "Minyak Sawit (CPO)",
+        "tickers": {
+            "AALI", "LSIP", "TAPG", "SIMP", "SSMS", "DSNG", "BWPT", "TBLA", "STAA", "PALM"
+        },
+        "query": '("crude palm oil" OR "palm oil price" OR "cpo futures" OR "malaysia palm oil")',
+    },
+    "BANKING_MACRO": {
+        "label": "Perbankan & Suku Bunga Makro",
+        "tickers": {
+            "BBCA", "BBRI", "BMRI", "BBNI", "BBTN", "BDMN", "BRIS", "BNGA", "ARTO", "BTPS"
+        },
+        "query": '("Federal Reserve interest rate" OR "Treasury yield" OR "Bank Indonesia rate" OR "USD IDR")',
+    },
+    "PULP_PAPER": {
+        "label": "Kertas & Pulp",
+        "tickers": {"INKP", "TKIM"},
+        "query": '("pulp price" OR "wood pulp market" OR "paper packaging demand")',
+    },
+    "RENEWABLE_ENERGY": {
+        "label": "Energi Terbarukan",
+        "tickers": {"BREN", "PGEO", "KEEN", "ARKO"},
+        "query": '("geothermal energy" OR "renewable energy capacity" OR "green energy transition")',
+    },
+    "POULTRY_FEED": {
+        "label": "Unggas & Pakan Ternak",
+        "tickers": {"CPIN", "JPFA", "MAIN"},
+        "query": '("poultry feed cost" OR "corn price" OR "soybean meal price")',
+    },
+    "TECH_DIGITAL": {
+        "label": "Teknologi & Digital",
+        "tickers": {"GOTO", "BUKA", "EMTK", "WIRG", "BELI", "DCII", "MTDL"},
+        "query": '("tech stocks" OR "southeast asia tech startup" OR "cloud data center demand")',
+    },
+    "AUTOMOTIVE_HEAVY": {
+        "label": "Otomotif & Alat Berat",
+        "tickers": {"ASII", "AUTO", "UNTR", "HEXA"},
+        "query": '("heavy equipment demand mining" OR "electric vehicle market southeast asia" OR "auto sales")',
+    },
+    "CONSUMER_STAPLES": {
+        "label": "Konsumsi & Bahan Pokok",
+        "tickers": {"ICBP", "INDF", "MYOR", "UNVR", "CMRY", "ROTI"},
+        "query": '("wheat price" OR "sugar price" OR "packaged food inflation")',
+    },
+}
+
+
+def get_sector_catalyst(ticker: str, ticker_info: dict | None = None) -> dict | None:
+    """Tentukan katalis sektor global berdasarkan kode saham atau info yfinance."""
+    ticker_clean = str(ticker).upper().replace(".JK", "").strip()
+    if not ticker_clean:
+        return None
+
+    # 1. Cek direct match di ticker list
+    for key, data in SECTOR_CATALYSTS.items():
+        if ticker_clean in data["tickers"]:
+            return {"key": key, "label": data["label"], "query": data["query"]}
+
+    # 2. Fallback: Cocokkan berdasarkan 'sector' / 'industry' yfinance
+    if ticker_info and isinstance(ticker_info, dict):
+        sector = (ticker_info.get("sector") or "").lower()
+        industry = (ticker_info.get("industry") or "").lower()
+
+        if "coal" in industry:
+            return {"key": "COAL", "label": SECTOR_CATALYSTS["COAL"]["label"], "query": SECTOR_CATALYSTS["COAL"]["query"]}
+        if "oil" in industry or "gas" in industry or "petroleum" in industry:
+            return {"key": "OIL_GAS", "label": SECTOR_CATALYSTS["OIL_GAS"]["label"], "query": SECTOR_CATALYSTS["OIL_GAS"]["query"]}
+        if "gold" in industry or "copper" in industry:
+            return {"key": "GOLD_COPPER", "label": SECTOR_CATALYSTS["GOLD_COPPER"]["label"], "query": SECTOR_CATALYSTS["GOLD_COPPER"]["query"]}
+        if "bank" in industry or "financial" in sector:
+            return {"key": "BANKING_MACRO", "label": SECTOR_CATALYSTS["BANKING_MACRO"]["label"], "query": SECTOR_CATALYSTS["BANKING_MACRO"]["query"]}
+        if "farm" in industry or "agriculture" in industry:
+            return {"key": "CPO_AGRI", "label": SECTOR_CATALYSTS["CPO_AGRI"]["label"], "query": SECTOR_CATALYSTS["CPO_AGRI"]["query"]}
+
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_global_sector_news(category_label: str, query_str: str, num: int = 2, days_back: int = 14) -> list[dict]:
+    """Ambil berita sektor/komoditas global dalam bahasa Inggris via Google News US RSS (di-cache per sektor)."""
+    if not RSS_AVAILABLE:
+        return []
+    try:
+        news, _ = get_google_news_rss(query_str, num=num, days_back=days_back, lang="en")
+        for n in news:
+            n["source"] = f"Global: {category_label}"
+            n["is_global"] = True
+        return news
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -364,14 +489,15 @@ def get_ipot_news(query, num=5):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def get_headlines_for_ticker(ticker):
-    """Ambil maks 3 judul berita terbaru yang relevan dengan ticker."""
+def get_headlines_for_ticker(ticker, include_global=True):
+    """Ambil judul berita terbaru yang relevan dengan ticker + konteks katalis global sektor."""
     try:
         ticker_clean = str(ticker).upper().replace(".JK", "").strip()
         if not ticker_clean:
             return ["(ticker kosong)"]
 
         _long_name = ""
+        _info = {}
         try:
             _info = yf.Ticker(f"{ticker_clean}.JK").info or {}
             _ln = _info.get("longName", "") or _info.get("shortName", "") or ""
@@ -404,10 +530,22 @@ def get_headlines_for_ticker(ticker):
         except Exception:
             filtered = unique
 
+        results = []
         if filtered:
-            return [n["title"] for n in filtered[:3]]
+            results = [n["title"] for n in filtered[:2]]
         elif unique:
-            return [n["title"] for n in unique[:3]]
+            results = [n["title"] for n in unique[:2]]
+
+        # Sisipkan berita sektor/komoditas global jika tersedia
+        if include_global:
+            catalyst = get_sector_catalyst(ticker_clean, _info)
+            if catalyst:
+                global_news = get_global_sector_news(catalyst["label"], catalyst["query"], num=2)
+                for g in global_news:
+                    results.append(f"[Global {catalyst['label']}] {g['title']}")
+
+        if results:
+            return results[:3]
         else:
             return ["(tidak ada berita terbaru)"]
     except Exception:
