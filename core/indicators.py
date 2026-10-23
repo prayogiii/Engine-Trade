@@ -129,28 +129,59 @@ def robust_std(series) -> float:
 # ═══════════════════════════════════════════════════════════════
 # BAR COUNTING (sisa sesi intraday)
 # ═══════════════════════════════════════════════════════════════
-BARS_PER_DAY_MAP = {"5m": 54, "15m": 18, "30m": 9, "60m": 5}
+# Bar per hari bursa penuh (Senin-Kamis, 319 menit efektif: 09:00-12:00 + 13:30-15:49)
+# Jumat punya sesi lebih pendek (259 menit) — di-cover oleh hitung_bars_remaining
+# via perhitungan sesi eksplisit, tidak lewat map ini.
+BARS_PER_DAY_MAP = {"5m": 64, "15m": 22, "30m": 11, "60m": 6}
 _INTERVAL_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "60m": 60}
 
 
 def hitung_bars_remaining(now_jkt, actual_interval: str,
                           bars_per_day_map: dict | None = None) -> int:
-    """Estimasi sisa bar intraday sampai jam tutup (15:00 WIB)."""
+    """
+    Estimasi sisa bar intraday sampai akhir sesi bursa BEI.
+
+    Jam bursa BEI (sejak April 2023):
+      Senin-Kamis: Sesi I 09:00-12:00, Sesi II 13:30-15:49 WIB
+      Jumat:       Sesi I 09:00-11:30, Sesi II 14:00-15:49 WIB
+    (pra-penutupan 15:49-16:00 tidak dihitung sebagai sesi trading)
+
+    Return:
+      - Dalam sesi / istirahat hari bursa: sisa bar dari sekarang sampai 15:49
+        (atau sisa sesi I + sesi II untuk pagi Jumat).
+      - Weekend: estimasi total bar per hari penuh (bars_per_day_map).
+      - Selalu minimal 1 (kompatibel dengan sizing Monte Carlo).
+    """
     if bars_per_day_map is None:
         bars_per_day_map = BARS_PER_DAY_MAP
-    h, m = now_jkt.hour, now_jkt.minute
     interval_menit = _INTERVAL_MINUTES.get(actual_interval, 5)
+    full_day_bars = max(1, bars_per_day_map.get(actual_interval, 64))
 
-    if h < 12 or (h == 12 and m == 0):
-        sisa = (12 * 60 - (h * 60 + m)) + 90
-    elif h == 12 or (h == 13 and m < 30):
-        sisa = 90
-    elif (h == 13 and m >= 30) or h == 14 or (h == 15 and m == 0):
-        sisa = 15 * 60 - (h * 60 + m)
+    if now_jkt.weekday() >= 5:
+        return full_day_bars
+
+    is_friday = now_jkt.weekday() == 4
+    if is_friday:
+        s1_start, s1_end = 9 * 60, 11 * 60 + 30
+        s2_start, s2_end = 14 * 60, 15 * 60 + 49
     else:
-        return max(1, bars_per_day_map.get(actual_interval, 54))
+        s1_start, s1_end = 9 * 60, 12 * 60
+        s2_start, s2_end = 13 * 60 + 30, 15 * 60 + 49
 
-    return max(1, math.ceil(sisa / interval_menit))
+    t = now_jkt.hour * 60 + now_jkt.minute
+
+    if t < s1_start:
+        sisa_menit = (s1_end - s1_start) + (s2_end - s2_start)
+    elif t <= s1_end:
+        sisa_menit = (s1_end - t) + (s2_end - s2_start)
+    elif t < s2_start:
+        sisa_menit = s2_end - s2_start
+    elif t <= s2_end:
+        sisa_menit = s2_end - t
+    else:
+        return 1
+
+    return max(1, math.ceil(sisa_menit / interval_menit))
 def safe_float(value, default=0.0):
     """Konversi aman ke float, kembalikan default jika gagal."""
     try:
