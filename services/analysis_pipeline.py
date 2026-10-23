@@ -17,11 +17,7 @@ import numpy as np
 from services.yfinance_client import load_stock_data, load_ihsg_data
 from core.mtf import check_mtf_anchor
 from core.vsa import detect_marking_close, detect_vsa_flags, build_vsa_status_text
-from core.indicators import compute_adx_series, compute_ofi_enhanced
-
-
-BARS_PER_DAY_MAP = {"5m": 54, "15m": 18, "30m": 9, "60m": 5}
-
+from core.indicators import compute_adx_series, compute_ofi_enhanced, BARS_PER_DAY_MAP
 
 def prepare_analysis_data(
     ticker_input: str,
