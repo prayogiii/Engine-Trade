@@ -20,11 +20,21 @@ LIBUR_BURSA: dict[str, str] = {
 }
 
 
-def dalam_jam_perdagangan(hour: int, minute: int) -> bool:
-    """Cek apakah jam:menit ada di sesi I atau II BEI."""
-    sesi1 = (hour == 9 and minute >= 0) or (10 <= hour < 12) or (hour == 12 and minute == 0)
-    sesi2 = (hour == 13 and minute >= 30) or (hour == 14) or (hour == 15 and minute == 0)
-    return sesi1 or sesi2
+def dalam_jam_perdagangan(hour: int, minute: int, is_friday: bool = False) -> bool:
+    """
+    Cek apakah jam:menit ada di sesi I atau II BEI.
+
+    Jam bursa BEI (April 2023 – sekarang):
+      Senin-Kamis: Sesi I 09:00-12:00, Sesi II 13:30-15:49 WIB
+      Jumat:       Sesi I 09:00-11:30, Sesi II 14:00-15:49 WIB
+    (pra-penutupan 15:49-16:00 bukan sesi perdagangan reguler)
+
+    is_friday: True untuk hari Jumat. Default False (Senin-Kamis).
+    """
+    t = hour * 60 + minute
+    if is_friday:
+        return (9 * 60 <= t <= 11 * 60 + 30) or (14 * 60 <= t <= 15 * 60 + 49)
+    return (9 * 60 <= t <= 12 * 60) or (13 * 60 + 30 <= t <= 15 * 60 + 49)
 
 
 def status_bursa(now_jkt: datetime) -> tuple[str, str]:
@@ -33,13 +43,24 @@ def status_bursa(now_jkt: datetime) -> tuple[str, str]:
     level ∈ {"open", "closed", "weekend", "holiday"}
     """
     today_str = now_jkt.strftime("%Y-%m-%d")
-    today_day = now_jkt.strftime("%A")
     if today_str in LIBUR_BURSA:
         return "holiday", f"🔴 Bursa **TUTUP**: {LIBUR_BURSA[today_str]}"
-    if today_day in ("Saturday", "Sunday"):
+    if now_jkt.weekday() >= 5:                       # 5=Sabtu, 6=Minggu
         return "weekend", "🔴 Akhir pekan — bursa tutup."
-    if dalam_jam_perdagangan(now_jkt.hour, now_jkt.minute):
-        return "open", "🟢 Bursa **TERBUKA** (09:00-12:00 & 13:30-15:00 WIB)"
+
+    is_friday = now_jkt.weekday() == 4
+    if dalam_jam_perdagangan(now_jkt.hour, now_jkt.minute, is_friday=is_friday):
+        return "open", "🟢 Bursa **TERBUKA** (Sesi I & II, tutup 15:49 WIB)"
+
+    # Istirahat siang
+    t = now_jkt.hour * 60 + now_jkt.minute
+    if is_friday:
+        if 11 * 60 + 30 < t < 14 * 60:
+            return "closed", "⚪ Istirahat siang (11:30-14:00 WIB)."
+    else:
+        if 12 * 60 < t < 13 * 60 + 30:
+            return "closed", "⚪ Istirahat siang (12:00-13:30 WIB)."
+
     return "closed", "⚪ Bursa **TUTUP** (di luar jam perdagangan)."
 
 
