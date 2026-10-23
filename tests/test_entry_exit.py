@@ -127,3 +127,180 @@ def test_analyzer_and_scanner_paths_agree():
     assert analyzer["sl_mult_used"] == scanner["sl_mult_used"] == 1.0
     assert analyzer["entry_low_f"] == scanner["entry_low_f"]
     assert analyzer["sl_f"] == scanner["sl_f"]
+# ═══════════════════════════════════════════════════════════════
+# DUAL ENTRY MODE (Poin 3)
+# ═══════════════════════════════════════════════════════════════
+from core.entry_exit import classify_entry_mode
+from core.indicators import fraksi_step
+
+
+# ── classify_entry_mode: unit test ──
+def test_classify_breakout_all_conditions_met():
+    mode, _ = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=55, vol_surge_pct=80,
+        zscore=0.0, is_breakout=True,
+    )
+    assert mode == "breakout"
+
+
+def test_classify_breakout_requires_volume():
+    mode, reason = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=55, vol_surge_pct=30,
+        is_breakout=True,
+    )
+    assert mode == "auto"
+
+
+def test_classify_breakout_requires_breakout_flag():
+    mode, _ = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=55, vol_surge_pct=80,
+        is_breakout=False,
+    )
+    assert mode == "auto"
+
+
+def test_classify_breakout_requires_buy_signal():
+    mode, _ = classify_entry_mode(
+        signal="⏸️ HOLD / WAIT", rsi14=55, vol_surge_pct=80, is_breakout=True,
+    )
+    assert mode == "auto"
+
+
+def test_classify_dip_oversold_by_rsi():
+    mode, _ = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=30, vol_surge_pct=0,
+    )
+    assert mode == "dip"
+
+
+def test_classify_dip_oversold_by_zscore():
+    mode, _ = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=40, vol_surge_pct=0, zscore=-1.5,
+    )
+    assert mode == "dip"
+
+
+def test_classify_dip_requires_oversold():
+    mode, _ = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=55, vol_surge_pct=0, zscore=0.0,
+    )
+    assert mode == "auto"
+
+
+def test_classify_avoid_is_auto():
+    mode, _ = classify_entry_mode(
+        signal="🚨 AVOID", rsi14=30, vol_surge_pct=0,
+    )
+    assert mode == "auto"
+
+
+def test_classify_setup_type_oversold_rebound_is_dip():
+    # Scanner tag "Oversold Rebound" hanya muncul saat kondisi oversold
+    # terpenuhi (RSI ≤ 32, atau RSI ≤ 42 + Z ≤ -1.0). Test pakai kombinasi
+    # RSI 40 + Z -1.5 yang lazim muncul di scanner.
+    mode, _ = classify_entry_mode(
+        signal="⚡ BUY (TACTICAL)", rsi14=40, vol_surge_pct=0, zscore=-1.5,
+        setup_type="🎯 Oversold Rebound",
+    )
+    assert mode == "dip"
+
+
+def test_classify_setup_type_breakout_play_is_breakout():
+    mode, _ = classify_entry_mode(
+        signal="STRONG BUY ▲▲", rsi14=55, vol_surge_pct=80, is_breakout=True,
+        setup_type="🚀 Breakout Play",
+    )
+    assert mode == "breakout"
+
+
+def test_classify_setup_type_downgrades_without_volume():
+    mode, reason = classify_entry_mode(
+        signal="STRONG BUY ▲▲", rsi14=55, vol_surge_pct=30, is_breakout=True,
+        setup_type="🚀 Breakout Play",
+    )
+    assert mode == "auto"
+    assert "downgrade" in reason.lower()
+
+
+# ── Entry zone shape per mode ──
+def test_breakout_entry_zone_is_tight():
+    out = compute_entry_zone_and_sl_tp(**_base(
+        signal="⚡ BUY (TACTICAL)",
+        vol_surge_pct=80, is_breakout=True,
+    ))
+    assert out["entry_mode_used"] == "breakout"
+    tick = fraksi_step(1000.0)
+    assert out["entry_low"]  == pytest.approx(1000.0, abs=1)
+    assert out["entry_high"] == pytest.approx(1000.0 + tick, abs=1)
+
+
+def test_dip_entry_zone_capped_at_2pct():
+    out = compute_entry_zone_and_sl_tp(**_base(
+        rsi14=30, signal="⚡ BUY (TACTICAL)", vol_surge_pct=0,
+    ))
+    assert out["entry_mode_used"] == "dip"
+    assert out["entry_low"]  >= 1000.0 * 0.98 - 1
+    assert out["entry_high"] <  1000.0
+
+
+def test_dip_entry_high_below_last_by_tick():
+    out = compute_entry_zone_and_sl_tp(**_base(rsi14=30, s1=960.0))
+    assert out["entry_mode_used"] == "dip"
+    tick = fraksi_step(1000.0)
+    assert out["entry_high"] <= 1000.0 - tick + 1
+
+
+def test_auto_mode_preserves_legacy_behavior():
+    out = compute_entry_zone_and_sl_tp(**_base(signal="⏸️ HOLD / WAIT"))
+    assert out["entry_mode_used"] == "auto"
+
+
+# ── Manual override (Q4) ──
+def test_forced_breakout_downgrades_when_conditions_fail():
+    out = compute_entry_zone_and_sl_tp(**_base(
+        entry_mode="breakout", vol_surge_pct=10, is_breakout=False,
+    ))
+    assert out["entry_mode_used"] == "auto"
+
+
+def test_forced_breakout_applied_when_conditions_met():
+    out = compute_entry_zone_and_sl_tp(**_base(
+        entry_mode="breakout", vol_surge_pct=80, is_breakout=True,
+    ))
+    assert out["entry_mode_used"] == "breakout"
+
+
+def test_forced_dip_downgrades_when_not_oversold():
+    out = compute_entry_zone_and_sl_tp(**_base(entry_mode="dip", rsi14=55))
+    assert out["entry_mode_used"] == "auto"
+
+
+def test_forced_dip_applied_when_oversold():
+    out = compute_entry_zone_and_sl_tp(**_base(entry_mode="dip", rsi14=30))
+    assert out["entry_mode_used"] == "dip"
+
+
+def test_invalid_entry_mode_falls_back_to_auto():
+    out = compute_entry_zone_and_sl_tp(**_base(entry_mode="garbage_mode"))
+    assert out["entry_mode_used"] == "auto"
+
+
+# ── Return dict contract ──
+def test_entry_mode_fields_in_return():
+    out = compute_entry_zone_and_sl_tp(**_base())
+    assert "entry_mode_used" in out
+    assert "entry_mode_reason" in out
+    assert out["entry_mode_used"] in ("auto", "breakout", "dip")
+
+
+# ── Ordering invariant tetap berlaku di semua mode ──
+@pytest.mark.parametrize("overrides,expected_mode", [
+    (dict(vol_surge_pct=80, is_breakout=True), "breakout"),
+    (dict(rsi14=30), "dip"),
+    (dict(), "auto"),
+])
+def test_ordering_invariant_each_mode(overrides, expected_mode):
+    out = compute_entry_zone_and_sl_tp(**_base(**overrides))
+    assert out["entry_mode_used"] == expected_mode
+    assert out["sl"] < out["entry_low"] <= out["entry_high"]
+    assert out["entry_high"] < out["tp_low"] <= out["tp_high"]
