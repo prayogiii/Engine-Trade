@@ -127,15 +127,15 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
         if sigma_price < 1e-6:
             sigma_price = sma20 * 0.02
         z_score_val = float(np.clip((last_price - sma20) / sigma_price, -5.0, 5.0))
-        mr_norm = np.clip(-z_score_val / 3.0, -1, 1)  # FIX: /3.0 konsisten dengan analysis_engine
+        mr_norm = np.clip(-z_score_val / 3.0, -1, 1)  # /3.0 konsisten dengan analysis_engine
 
         # RSI — filter/bonus, BUKAN komponen score (anti double-count dengan MeanRev/ZScore)
         rsi_ch = s_ret[-14:]
         gains = np.mean(rsi_ch[rsi_ch > 0]) if np.any(rsi_ch > 0) else 0.0
         losses = -np.mean(rsi_ch[rsi_ch < 0]) if np.any(rsi_ch < 0) else 1e-6
         rsi_val = 100.0 - (100.0 / (1.0 + gains / (losses + 1e-9)))
-        rsi_bonus   = +0.06 if rsi_val < 25 else 0.0   # extreme oversold — mild boost
-        rsi_penalty = -0.08 if rsi_val > 75 else 0.0   # extreme overbought — mild brake
+        rsi_bonus   = +0.06 if rsi_val < 25 else 0.0
+        rsi_penalty = -0.08 if rsi_val > 75 else 0.0
         rsi_adj     = rsi_bonus + rsi_penalty
 
         # Volume Surge
@@ -148,28 +148,21 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
         breakout_bonus = 0.10 if (last_price > res20 and vol_surge > 0.5) else 0.0
 
         # Tech Score V14 — Dual Adaptive Scoring (Leader vs Rebound)
-        # Netralkan penalti beta saat saham terbukti kuat melawan arus (RS > 0)
         beta_effective = max(0.0, beta_norm) if rs_norm > 0 else beta_norm
 
-        # Tech Score V15 — Dual Adaptive Scoring (Leader vs Rebound)
         # 1. Jalur Strong Leader (Trend Following & Outperformer Lawan Arus)
-        # Bobot: mom 0.25 + copp 0.28 + beta 0.15 + mr 0.10 + vol 0.10 + rs 0.12
         score_leader = (mom_norm*0.25 + copp_norm*0.28 + beta_effective*0.15 +
                         mr_norm*0.10 + vol_surge*0.10 + rs_norm*0.12 +
                         breakout_bonus + rsi_adj)
 
         # 2. Jalur Oversold Rebound (Saham diskon ekstrem yang mulai memantul saat crash)
-        # Syarat KETAT: RSI wajib jenuh jual (<= 42) DAN Z-Score rendah (<= -1.0), atau extreme oversold (RSI <= 32).
-        # Saham dengan RSI > 45 TIDAK BOLEH diklasifikasikan sebagai Oversold Rebound!
         is_oversold = ((z_score_val <= -1.0 and rsi_val <= 42.0) or (rsi_val <= 32.0)) and (rsi_val < 48.0)
         has_rebound_trigger = (is_turning_up or copp_rising or s_ret[-1] > 0) and (vol_surge > -0.6)
 
         if is_oversold and has_rebound_trigger:
-            # Pada saham rebound: RS negatif dimaafkan (tidak kena penalti), bobot Mean Reversion ditingkatkan
             rs_rebound_boost = max(0.0, rs_norm) * 0.10
-            mom_rebound = max(mom_norm, 0.0) * 0.10  # penalti momentum masa lalu diredam
+            mom_rebound = max(mom_norm, 0.0) * 0.10
             vol_boost = max(0.0, vol_surge) * 0.12
-            # Rebound kicker jika ada candle reversal hijau hari ini
             reversal_kicker = 0.08 if s_ret[-1] > 0 else 0.04
             score_rebound = (mr_norm * 0.32 +
                              copp_norm * 0.24 +
@@ -182,7 +175,6 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
             score_rebound = -1.0
 
         # Hierarki Penentuan Tipe Setup & Scoring (Mutually Exclusive):
-        # A. Strong Leader: Terbukti melawan arus / outperform dengan momentum sehat (RSI >= 46 atau RS tinggi)
         is_strong_leader = (rs_norm >= 0.25 or rs_blend >= 0.015) and (rsi_val >= 46.0 or last_price > sma20)
 
         if is_strong_leader:
@@ -203,19 +195,18 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
 
         tech_score = float(np.clip(tech_score, -1.0, 1.0))
 
-        # Sinyal — threshold dinamis:
-        # Saham Rebound di lembah threshold lebih terjangkau, sedangkan saham Leader saat bearish dituntut ketat
+        # Sinyal — threshold dinamis
         _ema20_ihsg = pd.Series(i_adj).ewm(span=20, adjust=False).mean().iloc[-1]
         _sma20_ihsg = np.mean(i_adj[-20:])
         risk_on_pre = _ema20_ihsg > _sma20_ihsg and i_ret5 > 0
 
         if risk_on_pre:
-            th_strong, th_buy, th_weak = 0.40, 0.15, 0.05   # longgar saat market bullish
+            th_strong, th_buy, th_weak = 0.40, 0.15, 0.05
         else:
             if setup_type == "🎯 Oversold Rebound":
-                th_strong, th_buy, th_weak = 0.45, 0.18, 0.08  # ambang pas untuk saham pantulan dari dasar
+                th_strong, th_buy, th_weak = 0.45, 0.18, 0.08
             else:
-                th_strong, th_buy, th_weak = 0.50, 0.25, 0.10  # ketat saat bearish untuk membuang false positive
+                th_strong, th_buy, th_weak = 0.50, 0.25, 0.10
 
         if tech_score > th_strong:    signal = "STRONG BUY ▲▲"
         elif tech_score > th_buy:     signal = "BUY ▲"
@@ -238,14 +229,12 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
         else:
             regime = "Market Bearish 🔻"
 
-        # Estimasi return forward-looking (bukan proyeksi return IHSG masa lalu)
+        # Estimasi return forward-looking
         alpha = np.mean(s_ret) - beta * np.mean(i_ret)
         if tech_score > 0.05:
-            # Untuk kandidat Beli: estimasi upside berdasarkan alpha, momentum positif, dan volatilitas
             upside_mom = max(0.0, mom_combo) * 0.25
             upside_alpha = max(0.0, alpha) * 2.0
             upside_vol = 0.5 * sigma20
-            # Jika rebound di bawah SMA20, estimasi tarikan balik ke SMA20
             dist_to_sma = (sma20 - last_price) / max(last_price, 1.0)
             upside_rebound = min(dist_to_sma * 0.7, 0.08) if (dist_to_sma > 0 and setup_type == "🎯 Oversold Rebound") else 0.0
             mu_est = float(np.clip(max(0.02, upside_mom + upside_alpha + upside_vol + upside_rebound), 0.015, 0.08))
@@ -274,12 +263,11 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
         else:
             trend_consistency = 50.0
 
-        # ── Pivot S1 (diperlukan sebagai input unified entry/exit) ──
+        # ── Pivot S1 (input unified entry/exit) ──
         pivot = (float(highs[-1]) + float(lows[-1]) + float(closes[-1])) / 3.0
         s1 = 2 * pivot - float(highs[-1])
 
-        # ── Entry / SL / TP — UNIFIED (core.entry_exit) ──
-        # Sumber tunggal kebenaran: formula ini IDENTIK dengan services/analyze_stock.py.
+        # ── Entry / SL / TP — UNIFIED (core.entry_exit + Dual Entry Mode) ──
         _mem = (v12_mem or {}).get(ticker, {}) if v12_mem else {}
         _entry_error = _mem.get('entry_error_ema', 0.0)
 
@@ -292,6 +280,11 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
             signal=signal,
             is_daytrade=False,
             entry_error=_entry_error,
+            # ── Dual Entry Mode inputs ──
+            vol_surge_pct=vol_surge * 100.0,   # vol_surge ∈ [-1,1]
+            is_breakout=(last_price > res20),
+            zscore=z_score_val,
+            setup_type=setup_type,
         )
         entry_low  = _ev["entry_low"]
         entry_high = _ev["entry_high"]
@@ -335,10 +328,13 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
             "rrr": rrr,
             "confidence": confidence,
             # Relative Strength vs IHSG & Adaptive Setup Type (V14)
-            "rsScore": rs_blend,       # raw % outperformance vs IHSG
-            "rsNorm": rs_norm,         # normalized -1..1
-            "rsLabel": rs_label,       # label untuk UI
-            "setupType": setup_type,   # tipe setup: Strong Leader, Oversold Rebound, etc.
+            "rsScore": rs_blend,
+            "rsNorm": rs_norm,
+            "rsLabel": rs_label,
+            "setupType": setup_type,
+            # Dual Entry Mode audit (Poin 3)
+            "entryMode": _ev["entry_mode_used"],
+            "entryModeReason": _ev["entry_mode_reason"],
         }
 
     except Exception:
