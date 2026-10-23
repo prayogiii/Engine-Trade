@@ -40,7 +40,7 @@ from services.analysis_engine import (
     compute_pivots, compute_v12_signal,
 )
 from services.sheets_client import get_regime_signal_accuracy
-
+from core.entry_exit import compute_entry_zone_and_sl_tp
 
 def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
                   sudah_beli, harga_beli_float,
@@ -160,148 +160,44 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     th_buy = _v12["th_buy"]
     th_hold = _v12["th_hold"]
     score_std = _v12["score_std"]
-    # 12. ENTRY ZONE (v2 — anti-NT, more accommodating)
-    if s1 >= harga_terakhir * 0.98:
-        entry_low = s1
-    else:
-        entry_low = harga_terakhir * (1 - atr_pct / 100)
-
-    if "STRONG BUY" in signal or "BUY" in signal:
-        gap_catch_bonus = min(0.5 * atr_pct / 100, 0.015) 
-        entry_high = harga_terakhir * (1 + gap_catch_bonus)
-    else:
-        entry_high = harga_terakhir * (1 - 0.15 * atr_pct / 100)
-
-    if entry_low > entry_high:
-        entry_low, entry_high = entry_high, entry_low
-    min_entry_width = 0.6 * atr14_val
-    if (entry_high - entry_low) < min_entry_width:
-        entry_low = max(0, entry_high - min_entry_width)
-        entry_high = entry_low + min_entry_width
+    # 12-13. ENTRY / SL / TP — UNIFIED (core.entry_exit)
     if v12_mem is not None:
         mem_for_entry = v12_mem.get(ticker_raw, {})
     else:
         mem_for_entry = st.session_state.v12_memory.get(ticker_raw, {})
     entry_error = mem_for_entry.get('entry_error_ema', 0.0)
 
-    if entry_error > 0:
-        max_shift = harga_terakhir * 0.015   
-        shift = min(entry_error * 0.15, max_shift)   
-        entry_low += shift
-        entry_high += shift
-    if (entry_low is None) or (isinstance(entry_low, float) and math.isnan(entry_low)) or entry_low <= 0:
-        entry_low = harga_terakhir * 0.98 if harga_terakhir > 0 else 1
-    if (entry_high is None) or (isinstance(entry_high, float) and math.isnan(entry_high)) or entry_high <= 0:
-        entry_high = harga_terakhir if harga_terakhir > 0 else 1
-    if entry_low > entry_high:
-        entry_low, entry_high = entry_high, entry_low
-    entry_low_f = fraksi_bei(entry_low)
-    entry_high_f = fraksi_bei(entry_high)
-    entry_zone_f = f"Rp {entry_low_f:,.0f} - Rp {entry_high_f:,.0f}"
+    _ev = compute_entry_zone_and_sl_tp(
+        last_price=harga_terakhir,
+        s1=s1, r1=r1, r2=r2,
+        atr_val=atr14_val, atr_pct=atr_pct, atr_daily=atr14_daily,
+        adx=adx, rsi14=rsi14, signal=signal,
+        is_daytrade=is_daytrade,
+        entry_error=entry_error,
+        fee_beli_pct=fee_beli_pct, fee_jual_pct=fee_jual_pct,
+        bars_per_day=bars_per_day_map.get(actual_interval, 54),
+    )
 
-    # 13. SL & TP
-    sl_mult = 1.0
-    if adx > 30 and 30 < rsi14 < 70:
-        sl_mult = 0.75
-    elif adx < 20:
-        sl_mult = 1.25
-    if rsi14 > 70 or rsi14 < 30:
-        sl_mult = 1.5
+    entry_low        = _ev["entry_low"]
+    entry_high       = _ev["entry_high"]
+    entry_low_f      = _ev["entry_low_f"]
+    entry_high_f     = _ev["entry_high_f"]
+    entry_zone_f     = _ev["entry_zone_f"]
+    sl_harga         = _ev["sl"]
+    sl_harga_f       = _ev["sl_f"]
+    sl_pct           = _ev["sl_pct"]
+    tp_low           = _ev["tp_low"]
+    tp_high          = _ev["tp_high"]
+    tp_low_f         = _ev["tp_low_f"]
+    tp_high_f        = _ev["tp_high_f"]
+    tp_pct_low       = _ev["tp_pct_low"]
+    tp_pct_high      = _ev["tp_pct_high"]
+    rrr              = _ev["rrr"]
 
-    if is_daytrade:
-        # ATR daily = range (high-low) harian, bukan directional move.
-        # Untuk 1 sesi, directional move biasanya 40-60% dari range harian.
-        tp_mult_low = 0.35
-        tp_mult_high = 0.65
-        if adx > 30 and 30 < rsi14 < 70:
-            tp_mult_low, tp_mult_high = 0.5, 0.8
-        elif adx < 20:
-            tp_mult_low, tp_mult_high = 0.3, 0.55
-    else:
-        tp_mult_low = 1.5
-        tp_mult_high = 2.5
-        if adx > 30 and 30 < rsi14 < 70:
-            tp_mult_low, tp_mult_high = 2.0, 3.0
-        elif adx < 20:
-            tp_mult_low, tp_mult_high = 1.2, 1.8
-
-    if is_daytrade:
-        base_sl_dist = harga_terakhir * 0.04 * sl_mult
-        min_ticks_dist = 2 * fraksi_step(entry_low)
-        sl_dist = max(min_ticks_dist, base_sl_dist)
-        sl_harga = entry_low - sl_dist
-    else:
-        sl_harga = entry_low - sl_mult * atr14_val
-
-    sl_harga = fraksi_bei(sl_harga)
-    step = fraksi_step(entry_low)
-    if sl_harga >= entry_low:
-        sl_harga = fraksi_bei(entry_low - 2 * step)
-    if sl_harga <= 0:
-        sl_harga = fraksi_bei(harga_terakhir * 0.95)
-    sl_pct = (harga_terakhir - sl_harga) / harga_terakhir * 100
-
-    if is_daytrade:
-        # --- PERHITUNGAN TP DAYTRADE BERBASIS ATR HARIAN & FAKTOR FEE BROKER ---
-        # 1. Target ATR HARIAN (df_daily), bukan ATR 5m
-        if atr14_daily is not None and atr14_daily > 0:
-            atr_tp_base = atr14_daily
-        else:
-            # Fallback: scale ATR intraday ke estimasi harian
-            _bars_per_day = bars_per_day_map.get(actual_interval, 54)
-            atr_tp_base = atr14_val * (_bars_per_day ** 0.5)
-
-        tp_low_raw = entry_low + (tp_mult_low * atr_tp_base)
-        tp_high_raw = entry_low + (tp_mult_high * atr_tp_base)
-
-        # Cap TP DT — saham super volatil jangan sampai TP > 8%/12%
-        MAX_TP_LOW_PCT = 0.08
-        MAX_TP_HIGH_PCT = 0.12
-        tp_low_raw = min(tp_low_raw, entry_low * (1 + MAX_TP_LOW_PCT))
-        tp_high_raw = min(tp_high_raw, entry_low * (1 + MAX_TP_HIGH_PCT))
-
-        # 2. Safety Floor untuk Memastikan Cover Fee Broker (Beli + Jual) + Target Net Profit Margin (+0.6% net)
-        total_fee_pct = (fee_beli_pct + fee_jual_pct) / 100.0
-        min_net_margin = 0.0060
-        fee_floor = entry_low * (1.0 + total_fee_pct + min_net_margin)
-
-        # Gunakan nilai terbesar antara ATR Intraday & Fee Floor
-        tp_low_raw = max(tp_low_raw, fee_floor)
-        tp_high_raw = max(tp_high_raw, tp_low_raw + (2 * fraksi_step(tp_low_raw)))
-
-        # 3. Pastikan minimal 2 tick di atas entry_low dan harga_terakhir agar komisi tercover penuh
-        min_tp_low_ticks = max(entry_low + (2 * step), harga_terakhir + (2 * fraksi_step(harga_terakhir)))
-        if tp_low_raw < min_tp_low_ticks:
-            tp_low_raw = min_tp_low_ticks
-
-        tp_low = fraksi_bei(tp_low_raw)
-        tp_high = fraksi_bei(tp_high_raw)
-        if tp_low <= entry_low:
-            tp_low = fraksi_bei(entry_low + 2 * step)
-        if tp_high <= tp_low:
-            tp_high = fraksi_bei(tp_low + 2 * fraksi_step(tp_low))
-    else:
-        # --- PERHITUNGAN TP SWING (RESISTANCE HARIAN / PIVOT R1 R2) ---
-        if r1 > harga_terakhir:
-            tp_low = r1
-        else:
-            tp_low = harga_terakhir + tp_mult_low * atr14_val
-        if r2 > harga_terakhir:
-            tp_high = r2
-        else:
-            tp_high = harga_terakhir + tp_mult_high * atr14_val
-        if tp_low > tp_high:
-            tp_low, tp_high = tp_high, tp_low
-
-    # Basis pakai entry_low_f (yang sudah dibulatkan tick) — biar persen konsisten dengan harga di UI
-    tp_pct_low = (tp_low - entry_low_f) / entry_low_f * 100
-    tp_pct_high = (tp_high - entry_low_f) / entry_low_f * 100
-
-    # ═══ FILTER DT: potensi TP harus ≥ 3% ═══
+    # DT downgrade filter (tidak berubah)
     DT_MIN_TARGET_PCT = 3.0
     signal_original = signal
     signal_downgrade_reason = ""
-
     if is_daytrade and ("STRONG BUY" in signal or "BUY" in signal):
         if tp_pct_low < DT_MIN_TARGET_PCT:
             signal = "⏸️ HOLD / WAIT (Potensi DT < 3%)"
@@ -311,19 +207,13 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
                 f"(butuh ≥ {DT_MIN_TARGET_PCT}% untuk DT layak)."
             )
 
-    risk = harga_terakhir - sl_harga
-    reward = tp_low - harga_terakhir
-    rrr = reward / risk if risk > 0 else 0
-    if rrr >= 2.0:
-        rrr_status = "Sangat Baik (≥ 2.0) 🟢"
-    elif rrr >= 1.5:
-        rrr_status = "Baik (1.5 - 2.0) 🟢"
-    elif rrr >= 1.0:
-        rrr_status = "Cukup (1.0 - 1.5) 🟡"
-    else:
-        rrr_status = "Buruk (< 1.0) 🔴"
+    # RRR status label
+    if rrr >= 2.0:   rrr_status = "Sangat Baik (≥ 2.0) 🟢"
+    elif rrr >= 1.5: rrr_status = "Baik (1.5 - 2.0) 🟢"
+    elif rrr >= 1.0: rrr_status = "Cukup (1.0 - 1.5) 🟡"
+    else:            rrr_status = "Buruk (< 1.0) 🔴"
 
-    # Dynamic Dip Target untuk RRR Ideal 1:2.0
+    # Dynamic dip target RRR 1:2.0 (tidak berubah)
     if tp_low > sl_harga:
         entry_ideal_raw = (tp_low + 2 * sl_harga) / 3.0
         entry_ideal_f = fraksi_bei(entry_ideal_raw)
@@ -331,7 +221,6 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         entry_ideal_f = max(entry_ideal_f, fraksi_bei(sl_harga + 2 * fraksi_step(sl_harga)))
     else:
         entry_ideal_f = fraksi_bei(entry_low)
-
     # Breakout
     if is_daytrade:
         bars_per_day = bars_per_day_map.get(actual_interval, 54)
@@ -348,7 +237,6 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
             res20 = float(df['High'].max())
         breakout_label = "Breakout 20 Hari"
     breakout = f"YES (🔥)" if harga_terakhir > res20 else "NO"
-
     # 14. BACKTEST — delegate ke core.backtest
     if is_daytrade:
         _bars_per_day = bars_per_day_map.get(actual_interval, 54)
@@ -426,20 +314,10 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     latest_vol = np.sqrt(df['Close'].pct_change().ewm(alpha=0.06).var().iloc[-1])
     scale_corrected = latest_vol / np.sqrt(df_est / (df_est - 2)) if df_est > 2 else latest_vol
 
-    # ── Deteksi regime Monte Carlo ──
-    _trending_up_regimes   = {"STABLE BULLISH", "VOLATILE UPTREND"}
-    _trending_down_regimes = {"HIGH-STRESS PANIC"}
-    _sideways_regimes      = {"SIDEWAYS / CONSOLIDATION", "BEARISH ACCUMULATION"}
-
-    _is_mc_bullish = (
-        regime in _trending_up_regimes or
-        "STRONG BUY" in signal or
-        (breakout == "YES (🔥)" and "BUY" in signal)
-    )
-    _is_mc_bearish = (
-        regime in _trending_down_regimes or
-        "AVOID" in signal
-    )
+    # ── Deteksi regime Monte Carlo (single source of truth) ──
+    mc_regime      = determine_mc_regime(regime, signal, breakout)
+    _is_mc_bullish = mc_regime == "bullish"
+    _is_mc_bearish = mc_regime == "bearish"
     # Default: sideways / mean-reverting
 
     paths       = np.zeros((n_steps, n_sim))
