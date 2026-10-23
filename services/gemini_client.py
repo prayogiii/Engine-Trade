@@ -617,3 +617,165 @@ def analisis_broksum_gemini_vision(image, api_key):
 
     except Exception as e:
         return None, f"Error Gemini Vision: {str(e)}"
+# ═══════════════════════════════════════════════════════════════
+# NEWS SENTIMENT EXTRACTION (Poin 5b)
+# ═══════════════════════════════════════════════════════════════
+import concurrent.futures
+
+_NEWS_SENTIMENT_PROMPT = """Kamu adalah analis saham IDX Indonesia. Analisis sentimen headline berita berikut.
+
+{numbered}
+
+Output JSON array SAJA (tanpa prose, tanpa markdown fence), {n} item sejajar urutan headline:
+[
+  {{"sentiment": <float -1.0..1.0>, "entities": [<list ticker/nama entitas>], "catalyst_type": "<dividend|earnings|regulation|macro|mna|litigation|other>", "confidence": <float 0.0..1.0>}},
+  ...
+]
+
+Panduan sentiment:
+- Katalis positif (dividen naik, laba melonjak, buyback, kontrak baru): +0.5 s/d +1.0
+- Katalis negatif (suspensi, PKPU, gagal bayar, rugi, delisting): -0.5 s/d -1.0
+- Netral / tidak jelas arah: -0.1 s/d +0.1
+- Catalyst "other" kalau bukan salah satu kategori jelas di atas
+"""
+
+
+def _empty_sentiment(reason: str = "") -> dict:
+    return {
+        "sentiment": 0.0, "entities": [], "catalyst_type": "other",
+        "confidence": 0.0, "_fallback": True, "_reason": reason,
+    }
+
+
+def _normalize_sentiment_obj(data: dict) -> dict:
+    try:
+        sentiment = max(-1.0, min(1.0, float(data.get("sentiment", 0.0))))
+    except (ValueError, TypeError):
+        sentiment = 0.0
+    try:
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+    except (ValueError, TypeError):
+        confidence = 0.5
+    entities = data.get("entities") or []
+    if not isinstance(entities, list):
+        entities = []
+    catalyst = str(data.get("catalyst_type", "other") or "other").lower().strip()
+    valid = {"dividend", "earnings", "regulation", "macro",
+             "mna", "litigation", "other"}
+    if catalyst not in valid:
+        catalyst = "other"
+    return {
+        "sentiment": sentiment,
+        "entities": [str(e).strip() for e in entities if e][:10],
+        "catalyst_type": catalyst,
+        "confidence": confidence,
+    }
+
+
+def _strip_fences(text: str) -> str:
+    text = text.strip()
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    return text
+
+
+def _parse_sentiment_array(raw: str, expected_n: int) -> list[dict]:
+    """Parse JSON array — 3 tier fallback (direct, extract, per-object)."""
+    if not raw:
+        return [_empty_sentiment("empty")] * expected_n
+    text = _strip_fences(raw)
+
+    # Tier 1: direct JSON array
+    try:
+        data = json.loads(text, strict=False)
+        if isinstance(data, list):
+            out = [_normalize_sentiment_obj(d) if isinstance(d, dict)
+                   else _empty_sentiment("non_dict")
+                   for d in data[:expected_n]]
+            while len(out) < expected_n:
+                out.append(_empty_sentiment("missing"))
+            return out
+    except Exception:
+        pass
+
+    # Tier 2: extract array via regex
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(0), strict=False)
+            if isinstance(data, list):
+                out = [_normalize_sentiment_obj(d) if isinstance(d, dict)
+                       else _empty_sentiment("non_dict")
+                       for d in data[:expected_n]]
+                while len(out) < expected_n:
+                    out.append(_empty_sentiment("missing"))
+                return out
+        except Exception:
+            pass
+
+    # Tier 3: extract individual objects
+    objs = re.findall(r"\{[^{}]+\}", text)
+    if objs:
+        out = []
+        for o in objs[:expected_n]:
+            try:
+                d = json.loads(o, strict=False)
+                out.append(_normalize_sentiment_obj(d))
+            except Exception:
+                out.append(_empty_sentiment("obj_parse_fail"))
+        while len(out) < expected_n:
+            out.append(_empty_sentiment("missing"))
+        return out
+
+    return [_empty_sentiment("no_json")] * expected_n
+
+
+def extract_news_sentiment_gemini(
+    headlines: list[str],
+    max_headlines: int = 3,
+    max_retries: int = 2,
+) -> list[dict]:
+    """
+    Structured extraction sentimen + entities + catalyst untuk batch headline.
+
+    Return list[dict] sejajar headlines[:max_headlines]:
+      {"sentiment": float, "entities": list[str],
+       "catalyst_type": str, "confidence": float}
+
+    Return [] kalau:
+      - headlines kosong
+      - tidak ada API key terkonfigurasi
+      - Gemini gagal / rate-limited / timeout (caller harus fallback ke VADER)
+    """
+    import os
+    if os.getenv("DISABLE_GEMINI_NEWS", "").lower() in ("1", "true", "yes"):
+        return []
+
+    if not headlines:
+        return []
+
+    if not _load_gemini_keys():
+        return []  # early-exit sebelum sentuh rotator/session_state
+
+    cleaned = []
+    for h in headlines[:max_headlines]:
+        if h and str(h).strip():
+            cleaned.append(str(h).strip()[:300].replace("\n", " ").replace("\r", " "))
+    if not cleaned:
+        return []
+
+    n = len(cleaned)
+    numbered = "\n".join(f'{i+1}. "{h}"' for i, h in enumerate(cleaned))
+    prompt = _NEWS_SENTIMENT_PROMPT.format(numbered=numbered, n=n)
+
+    try:
+        raw, err = call_gemini_auto_rotate(prompt, max_retries=max_retries)
+    except Exception:
+        return []
+
+    if err or not raw:
+        return []
+
+    return _parse_sentiment_array(raw, expected_n=n)
