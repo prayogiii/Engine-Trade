@@ -17,9 +17,14 @@ class TestDefaultWeight:
                 assert isinstance(w, float)
                 assert 0.0 <= w <= 0.5
 
-    def test_unknown_regime_uses_fallback(self):
+    def test_unknown_regime_falls_back_to_sideways(self):
+        """
+        Setelah Poin A (normalize_regime_key), regime yang tidak dikenali
+        di-fail-safe ke SIDEWAYS / CONSOLIDATION — bukan _FALLBACK_DEFAULT.
+        Momentum weight di SIDEWAYS = 0.15.
+        """
         w = default_weight("Momentum", "NONEXISTENT REGIME")
-        assert w == 0.23
+        assert w == 0.15
 
 
 class TestAdaptiveWeights:
