@@ -11,9 +11,10 @@ import pandas as pd
 from core.indicators import (
     fraksi_bei, fraksi_step, coppock_curve, robust_std,
 )
+from core.entry_exit import compute_entry_zone_and_sl_tp
 
 
-def score_stock_tech(df_stock, ticker, ihsg_data):
+def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
     """Menghitung skor teknikal + metrik lengkap untuk scanner V12."""
     try:
         closes = df_stock['Close'].values
@@ -273,39 +274,30 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
         else:
             trend_consistency = 50.0
 
-        # Entry Zone — batas bawah pullback wajar (maksimal 1.5% - 2.5% di bawah harga pasar)
+        # ── Pivot S1 (diperlukan sebagai input unified entry/exit) ──
         pivot = (float(highs[-1]) + float(lows[-1]) + float(closes[-1])) / 3.0
         s1 = 2 * pivot - float(highs[-1])
-        entry_high = fraksi_bei(last_price)
-        pullback_target = max(s1, last_price * (1 - 0.5 * sigma20))
-        pullback_floor = last_price * 0.975  # max pullback 2.5%
-        entry_low = fraksi_bei(max(pullback_target, pullback_floor))
-        if entry_low >= entry_high:
-            step = fraksi_step(last_price)
-            entry_low = fraksi_bei(entry_high - step)
 
-        # Stop Loss Est — terukur (3.5% - 5.5% dari harga beli, max 6.5%)
-        # Gunakan kombinasi swing low teknikal dan batas risiko volatilitas
-        recent_low = min(lows[-1], lows[-2]) if len(lows) >= 2 else lows[-1]
-        sl_vol_dist = max(0.035, min(0.055, 1.2 * sigma20))
-        sl_price_raw = min(last_price * (1 - sl_vol_dist), float(recent_low) - fraksi_step(recent_low))
-        sl_price_raw = max(sl_price_raw, last_price * 0.935)  # hard floor: max risk 6.5%
-        sl_est = fraksi_bei(sl_price_raw)
-        if sl_est >= entry_low:
-            step = fraksi_step(entry_low)
-            sl_est = fraksi_bei(entry_low - 2 * step)
+        # ── Entry / SL / TP — UNIFIED (core.entry_exit) ──
+        # Sumber tunggal kebenaran: formula ini IDENTIK dengan services/analyze_stock.py.
+        _mem = (v12_mem or {}).get(ticker, {}) if v12_mem else {}
+        _entry_error = _mem.get('entry_error_ema', 0.0)
 
-        # Take Profit Est — proporsional terhadap risiko (RRR target minimal 1.6 - 2.0)
-        risk_per_share = last_price - sl_est
-        min_reward = risk_per_share * 1.6  # jaminan reward minimal 1.6x risk
-        tp_target_vol = last_price * (1 + max(mu_est, 1.5 * sigma20))
-        tp_res20 = float(res20) if (res20 > last_price * 1.02) else 0.0
-        tp_raw = max(last_price + min_reward, tp_res20 if tp_res20 > 0 else tp_target_vol)
-        tp_raw = min(tp_raw, last_price * 1.15)  # cap rasional swing target
-        tp_est = fraksi_bei(tp_raw)
-        if tp_est <= last_price:
-            step = fraksi_step(last_price)
-            tp_est = fraksi_bei(last_price + 2 * step)
+        _ev = compute_entry_zone_and_sl_tp(
+            last_price=last_price,
+            s1=s1,
+            res20=res20,
+            sigma_ret=sigma20,        # ATR fallback untuk scanner
+            adx=None, rsi14=rsi_val,  # scanner tidak hitung ADX → sl_mult=1.0
+            signal=signal,
+            is_daytrade=False,
+            entry_error=_entry_error,
+        )
+        entry_low  = _ev["entry_low"]
+        entry_high = _ev["entry_high"]
+        sl_est     = _ev["sl"]
+        tp_est     = _ev["tp_low"]
+        rrr        = _ev["rrr"]
 
         # Likuiditas
         avg_value = np.mean(volumes[-20:] * closes[-20:])
@@ -315,12 +307,6 @@ def score_stock_tech(df_stock, ticker, ihsg_data):
             likuiditas_str = f"Rp {avg_value/1e6:.0f} Jt/hari"
         else:
             likuiditas_str = f"Rp {avg_value:,.0f}"
-
-        # Risk/Reward
-        entry_ref = (entry_low + entry_high) / 2.0
-        risk = entry_ref - sl_est
-        reward = tp_est - entry_ref
-        rrr = reward / risk if risk > 0 else 0.0
 
         # Confidence
         confidence = min(0.99, 0.5 + abs(tech_score) * 0.5)
