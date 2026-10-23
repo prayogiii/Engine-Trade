@@ -17,7 +17,7 @@ import numpy as np
 from services.yfinance_client import load_stock_data, load_ihsg_data
 from core.mtf import check_mtf_anchor
 from core.vsa import detect_marking_close, detect_vsa_flags, build_vsa_status_text
-from core.indicators import compute_adx_series
+from core.indicators import compute_adx_series, compute_ofi_enhanced
 
 
 BARS_PER_DAY_MAP = {"5m": 54, "15m": 18, "30m": 9, "60m": 5}
@@ -140,22 +140,15 @@ def prepare_analysis_data(
     df['Cumulative_OFI'] = df['Delta'].cumsum()
     df['OFI_raw'] = df['Delta'] / df['Volume'].rolling(20).mean().fillna(1)
 
-    # OFI — enhanced (shadow-weighted)
-    df['Upper_Shadow'] = df['High'] - df['Close']
-    df['Lower_Shadow'] = df['Open'] - df['Low']
-    df['Range'] = df['High'] - df['Low'] + 0.0001
-    df['Upper_Shadow_Ratio'] = df['Upper_Shadow'] / df['Range']
-    df['Lower_Shadow_Ratio'] = df['Lower_Shadow'] / df['Range']
-    df['Delta_Enhanced'] = np.where(
-        df['Close'] > df['Open'],
-        df['Volume'] * (1 - df['Upper_Shadow_Ratio']),
-        -df['Volume'] * (1 - df['Lower_Shadow_Ratio']),
-    )
+    # OFI — enhanced (shadow-weighted, bounded rolling flow)
+    _ofi = compute_ofi_enhanced(df, window=20)
+    df['Upper_Shadow_Ratio'] = _ofi['Upper_Shadow_Ratio']
+    df['Lower_Shadow_Ratio'] = _ofi['Lower_Shadow_Ratio']
+    df['Delta_Enhanced']     = _ofi['Delta_Enhanced']
+    df['OFI_Enhanced']       = _ofi['OFI_Enhanced']
+    # Dipertahankan untuk backward compat / display UI
     df['Cumulative_OFI_Enhanced'] = df['Delta_Enhanced'].cumsum()
-    df['OFI_Enhanced'] = (
-        df['Cumulative_OFI_Enhanced']
-        / df['Volume'].rolling(20).mean().fillna(1)
-    )
+    df['Range'] = df['High'] - df['Low'] + 0.0001
 
     # VWAP (daytrade only)
     if is_daytrade:
