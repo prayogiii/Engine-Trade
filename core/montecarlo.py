@@ -9,21 +9,27 @@ import numpy as np
 from scipy.stats import t as student_t
 
 from core.indicators import estimate_theta_ou
+from core.regime import normalize_regime_key, RegimeKey   
 
 
-_TRENDING_UP_REGIMES = {"STABLE BULLISH", "VOLATILE UPTREND"}
-_TRENDING_DOWN_REGIMES = {"HIGH-STRESS PANIC"}
+_TRENDING_UP_KEYS   = {RegimeKey.STABLE_BULLISH, RegimeKey.VOLATILE_UPTREND}
+_TRENDING_DOWN_KEYS = {RegimeKey.HIGH_STRESS_PANIC}
 
 
 def determine_mc_regime(regime, signal, breakout):
     """
     Return 'bullish' | 'bearish' | 'sideways'.
-    - bullish → GBM dengan drift positif
-    - bearish → GBM dengan drift negatif
+    - bullish → GBM drift positif
+    - bearish → GBM drift negatif
     - sideways → OU mean-reverting
+
+    Input `regime` boleh emoji label / legacy key / RegimeKey — akan
+    dinormalisasi via normalize_regime_key sebelum dicocokkan.
     """
+    rk = normalize_regime_key(regime)
+
     is_bullish = (
-        regime in _TRENDING_UP_REGIMES
+        rk in _TRENDING_UP_KEYS
         or "STRONG BUY" in signal
         or (breakout == "YES (🔥)" and "BUY" in signal)
     )
@@ -31,7 +37,7 @@ def determine_mc_regime(regime, signal, breakout):
         return "bullish"
 
     is_bearish = (
-        regime in _TRENDING_DOWN_REGIMES
+        rk in _TRENDING_DOWN_KEYS
         or "AVOID" in signal
     )
     if is_bearish:
