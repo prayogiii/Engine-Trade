@@ -14,7 +14,7 @@ import pandas as pd
 from config.settings import (
     FACTOR_KEYS, WEIGHT_MIN, WEIGHT_MAX, SOFTMAX_TEMP,
 )
-
+from core.regime import normalize_regime_key
 
 # ═══════════════════════════════════════════════════════════════
 # DEFAULT WEIGHTS
@@ -32,9 +32,10 @@ _FALLBACK_DEFAULT = {
 }
 
 
-def default_weight(factor: str, regime: str) -> float:
-    """Default weight untuk factor dalam regime tertentu."""
-    return _REGIME_DEFAULTS.get(regime, _FALLBACK_DEFAULT).get(factor, 0.15)
+def default_weight(factor: str, regime) -> float:
+    """Default weight untuk factor dalam regime tertentu (sudah dinormalisasi)."""
+    key = normalize_regime_key(regime).value
+    return _REGIME_DEFAULTS.get(key, _FALLBACK_DEFAULT).get(factor, 0.15)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -94,7 +95,7 @@ def compute_v12_score_series(
     s_mom = ((dataframe["Mom5D"] - mom_th) / mom_std).clip(-1, 1)
     s_mr = (-dataframe["ZScore"] / 3.0).clip(-1, 1)
     s_ofi = (
-        (dataframe["OFI_Enhanced"] / 5.0).clip(-1, 1)
+        dataframe["OFI_Enhanced"].clip(-1, 1)
         if "OFI_Enhanced" in dataframe.columns
         else pd.Series(0.0, index=dataframe.index)
     )
