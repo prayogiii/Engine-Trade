@@ -13,6 +13,8 @@ adalah UI (rendering) TIDAK bercampur dengan I/O.
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from datetime import datetime, timedelta
 from config.calendar import tambah_hari_bursa
@@ -96,7 +98,23 @@ def _is_evaluated(val) -> bool:
 # KONEKSI
 # ═══════════════════════════════════════════════════════════════
 def get_gsheet():
-    """Mengembalikan objek spreadsheet berdasarkan secrets."""
+    """
+    Mengembalikan objek spreadsheet.
+
+    Dual-context auth (Poin 7):
+      - Cron: env var CRON_GCP_CREDENTIALS_PATH + CRON_SHEET_ID (file-based).
+      - Streamlit UI: st.secrets (fallback default).
+    """
+    cron_creds = os.getenv("CRON_GCP_CREDENTIALS_PATH")
+    cron_sheet = os.getenv("CRON_SHEET_ID")
+    if cron_creds and cron_sheet:
+        creds = Credentials.from_service_account_file(
+            cron_creds,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        client = gspread.authorize(creds)
+        return client.open_by_key(cron_sheet)
+
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -693,7 +711,7 @@ def hapus_riwayat_item(waktu, saham, gaya=None):
 
 
 def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
-                          on_update_callback=None):
+                          on_update_callback=None, memory_store=None):
     """
     Simpan outcome actual ke riwayat_actual + trigger V12 learning.
     on_update_callback: optional callable(waktu, saham, actual_data, mode) → dijalankan
@@ -755,7 +773,11 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
         else:
             sheet.insert_row(new_row, index=2, value_input_option="RAW")
 
-        st.session_state.riwayat_actual = muat_riwayat_actual()
+        # Poin 7: cron context tidak punya session_state — fail-safe.
+        try:
+            st.session_state.riwayat_actual = muat_riwayat_actual()
+        except Exception:
+            pass
 
         if v12_consumed != "Yes":
             if on_update_callback is not None:
@@ -1132,23 +1154,41 @@ def evaluate_pending_signals(max_eval: int = 50) -> dict:
         return {**result, "error": str(e)}
 
 
-def update_v12_memory(ticker, factor_signals, actual_return, volatility=0.02):
-    """Wrapper — delegasi math ke core.scoring, persist ke Sheets."""
-    if ticker not in st.session_state.v12_memory:
-        st.session_state.v12_memory[ticker] = {
-            "weights": {}, "accuracy": {}, "error_ema": {},
-        }
-    mem = st.session_state.v12_memory[ticker]
+def update_v12_memory(ticker, factor_signals, actual_return, volatility=0.02,
+                      memory_store=None, skip_save=False):
+    """
+    Wrapper — delegasi math ke core.scoring, persist ke Sheets.
+
+    memory_store: dict opsional (cron context — bypass session_state).
+                  None → pakai st.session_state.v12_memory (UI context).
+    skip_save:    kalau True, caller bertanggung jawab save batch di akhir
+                  (untuk cron loop — hindari N kali write ke Sheets).
+    """
+    store = memory_store if memory_store is not None else st.session_state.v12_memory
+    if ticker not in store:
+        store[ticker] = {"weights": {}, "accuracy": {}, "error_ema": {}}
+    mem = store[ticker]
     new_mem = compute_memory_update_math(mem, factor_signals, actual_return, volatility)
-    st.session_state.v12_memory[ticker] = new_mem
-    save_v12_memory(st.session_state.v12_memory)
+    store[ticker] = new_mem
+    if not skip_save:
+        save_v12_memory(store)
 
 
 # ═══════════════════════════════════════════════════════════════
 # V12 LEARNING INTEGRATION
 # ═══════════════════════════════════════════════════════════════
-def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
-    """Belajar dari OUTCOME TRADE (Win/Loss/NT), bukan cuma close-to-close."""
+def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing",
+                            memory_store=None):
+    """
+    Belajar dari OUTCOME TRADE (Win/Loss/NT).
+
+    Poin 7 fix: actual_return dihitung riil dari Actual_High/Low vs Entry,
+    bukan hardcode ±0.03. Konsekuensi: factor learning bereaksi proporsional
+    terhadap besaran alpha — Win +10% ≠ Win +0.5%.
+
+    memory_store: dict opsional untuk cron (bypass session_state).
+                  None → fallback st.session_state (UI path).
+    """
     try:
         ticker = saham
         last_pred = load_v12_predictions(ticker, mode=mode)
@@ -1198,19 +1238,50 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
                             gap = entry_high_f * 0.01
 
                     if gap and gap > 0:
-                        mem = st.session_state.v12_memory.get(ticker, {})
+                        store = (
+                            memory_store if memory_store is not None
+                            else st.session_state.v12_memory
+                        )
+                        mem = store.get(ticker, {})
                         old_err = mem.get("entry_error_ema", 0.0)
                         mem["entry_error_ema"] = compute_entry_error_update(old_err, gap)
-                        st.session_state.v12_memory[ticker] = mem
-                        save_v12_memory(st.session_state.v12_memory)
+                        store[ticker] = mem
+                        # Cron: batch save di caller. UI: save langsung.
+                        if memory_store is None:
+                            save_v12_memory(store)
             return
 
-        # ═══ PRIORITAS 2: Win/Loss → belajar dari trade outcome ═══
-        if outcome_raw == 'WIN':
-            update_v12_memory(ticker, factor_signals, +0.03, volatility=_vol)
-            return
-        elif outcome_raw == 'LOSS':
-            update_v12_memory(ticker, factor_signals, -0.03, volatility=_vol)
+        # ═══ PRIORITAS 2: Win/Loss → hitung alpha RIIL (bukan ±0.03) ═══
+        if outcome_raw in ('WIN', 'LOSS'):
+            entry_high_f = safe_float(last_pred.get('entry_high'), 0.0)
+            entry_low_f = safe_float(last_pred.get('entry_low'), 0.0)
+            entry_ref = entry_high_f if entry_high_f > 0 else entry_low_f
+            if entry_ref <= 0:
+                return
+
+            actual_high = _to_float(actual_data.get('Actual_High', 0))
+            actual_low = _to_float(actual_data.get('Actual_Low', 0))
+            actual_close = _to_float(actual_data.get('Actual_Close', 0))
+
+            if outcome_raw == 'WIN':
+                # Notes: pakai Actual_High sebagai best-case capture
+                best = actual_high if actual_high > 0 else (
+                    actual_close if actual_close > 0 else entry_ref
+                )
+                actual_return = (best - entry_ref) / entry_ref
+            else:  # LOSS
+                # Simetris: pakai Actual_Low (worst-case drawdown)
+                worst = actual_low if actual_low > 0 else (
+                    actual_close if actual_close > 0 else entry_ref
+                )
+                actual_return = (worst - entry_ref) / entry_ref
+
+            actual_return = max(-1.0, min(1.0, actual_return))
+            update_v12_memory(
+                ticker, factor_signals, actual_return, volatility=_vol,
+                memory_store=memory_store,
+                skip_save=(memory_store is not None),  # cron: batch di caller
+            )
             return
 
         # ═══ PRIORITAS 3: Fallback close-to-close ═══
@@ -1223,15 +1294,23 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing"):
                     actual_return = (actual_close - last_close) / last_close
                     actual_return = max(-1.0, min(1.0, actual_return))
                     if abs(actual_return) >= 0.003:
-                        update_v12_memory(ticker, factor_signals, actual_return, volatility=_vol)
+                        update_v12_memory(
+                            ticker, factor_signals, actual_return,
+                            volatility=_vol,
+                            memory_store=memory_store,
+                            skip_save=(memory_store is not None),
+                        )
             except Exception:
                 pass
 
     except Exception as e:
-        st.error(f"Gagal integrasi V12: {e}")
-
-
-# ═══════════════════════════════════════════════════════════════
+        try:
+            if not (hasattr(st, "runtime") and st.runtime.exists()):
+                print(f"[sheets] integrate_actual_to_v12 error: {e}")
+            else:
+                st.error(f"Gagal integrasi V12: {e}")
+        except Exception:
+            print(f"[sheets] integrate_actual_to_v12 error (silent): {e}")# ═══════════════════════════════════════════════════════════════
 # BANDARMOLOGY DATA LOADER
 # ═══════════════════════════════════════════════════════════════
 def load_bandarmology_data(ticker):
@@ -1284,3 +1363,319 @@ def load_bandarmology_data(ticker):
         'bandarmology_status': latest.get('bandarmology_status', 'N/A'),
         'summary_narrative': latest.get('summary_narrative', ''),
     }
+# ═══════════════════════════════════════════════════════════════
+# POIN 7 — AUTO-EVALUATION CRON (feedback loop otonom)
+# ═══════════════════════════════════════════════════════════════
+def _parse_price_range(s: str) -> tuple[float | None, float | None]:
+    """Parse 'Rp 1,000 - Rp 1,100' → (1000.0, 1100.0). Comma = ribuan."""
+    if not s:
+        return None, None
+    nums = [n for n in re.findall(r"[\d,]+", str(s)) if n]
+    if len(nums) < 2:
+        return None, None
+    try:
+        return (float(nums[0].replace(",", "")), float(nums[1].replace(",", "")))
+    except ValueError:
+        return None, None
+
+
+def _parse_price_single(s: str) -> float | None:
+    """Parse 'Rp 1,000' atau '1,000' → 1000.0."""
+    if not s:
+        return None
+    nums = [n for n in re.findall(r"[\d,]+", str(s)) if n]
+    if not nums:
+        return None
+    try:
+        return float(nums[0].replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _determine_outcome(
+    entry_low: float, entry_high: float,
+    tp_low: float | None, sl: float | None,
+    actual_high: float, actual_low: float, actual_close: float,
+    entry_miss: str,
+) -> str:
+    """
+    Tentukan outcome dari actual HL C vs Entry/TP/SL.
+    Prioritas: Suspended > Not Touched > SL (SL menang duluan) > TP > Close-vs-Entry.
+    """
+    if actual_high <= 0 or actual_low <= 0:
+        return "Suspended"
+    if entry_miss == "Yes":
+        return "Not Touched"
+    if sl is not None and sl > 0 and actual_low <= sl:
+        return "Loss"
+    if tp_low is not None and tp_low > 0 and actual_high >= tp_low:
+        return "Win"
+    entry_ref = entry_high if entry_high > 0 else entry_low
+    return "Win" if actual_close > entry_ref else "Loss"
+
+
+def _save_actual_to_sheets_cron(
+    waktu: str, saham: str, mode: str,
+    actual_high: float, actual_low: float, actual_close: float,
+    outcome: str, entry_miss: str,
+) -> bool:
+    """Cron-safe versi simpan_riwayat_actual — tanpa session_state."""
+    def norm_gaya(val):
+        v = str(val).strip().lower()
+        if v in ("sw", "swing"): return "SW"
+        if v in ("dt", "daytrade", "day_trade", "day trade"): return "DT"
+        return val
+
+    try:
+        sheet = get_gsheet().worksheet("riwayat_actual")
+        records = sheet.get_all_records()
+        headers_9 = ["Waktu", "Saham", "Mode", "Actual_High", "Actual_Low",
+                     "Actual_Close", "Outcome", "Entry_Miss", "V12_Consumed"]
+        if sheet.col_count < 9:
+            sheet.add_cols(9 - sheet.col_count)
+        if not records:
+            sheet.update("A1:I1", [headers_9], value_input_option="RAW")
+            records = sheet.get_all_records()
+
+        target_gaya = norm_gaya(mode)
+        row_index = None
+        for i, row in enumerate(records):
+            r_mode = row.get("Mode") or row.get("Gaya") or ""
+            if (str(row.get("Waktu")) == str(waktu)
+                    and str(row.get("Saham")) == str(saham)
+                    and norm_gaya(r_mode) == target_gaya):
+                row_index = i + 2
+                break
+
+        new_row = [waktu, saham, mode,
+                   f"{actual_high:.0f}", f"{actual_low:.0f}", f"{actual_close:.0f}",
+                   outcome, entry_miss]
+        if row_index:
+            sheet.update(f"A{row_index}:H{row_index}", [new_row],
+                         value_input_option="RAW")
+        else:
+            sheet.insert_row(new_row, index=2, value_input_option="RAW")
+        return True
+    except Exception as e:
+        print(f"[cron] gagal simpan actual {saham}: {e}")
+        return False
+
+def _compute_learning_return(
+    entry_ref: float, outcome: str,
+    actual_high: float, actual_low: float, actual_close: float,
+) -> float:
+    """
+    Return yang SAMA dengan yang dipakai integrate_actual_to_v12 untuk memory.
+    - Win  → best-case (actual_high) — sesuai notes "alpha"
+    - Loss → worst-case (actual_low) — simetris
+    - NT / Suspended → 0.0
+    """
+    if entry_ref <= 0:
+        return 0.0
+    if outcome == "Win":
+        best = actual_high if actual_high > 0 else (
+            actual_close if actual_close > 0 else entry_ref
+        )
+        return max(-1.0, min(1.0, (best - entry_ref) / entry_ref))
+    if outcome == "Loss":
+        worst = actual_low if actual_low > 0 else (
+            actual_close if actual_close > 0 else entry_ref
+        )
+        return max(-1.0, min(1.0, (worst - entry_ref) / entry_ref))
+    return 0.0
+def auto_evaluate_riwayat_actual(
+    min_bdays: int = 5,
+    max_bdays: int = 30,
+    max_eval: int = 50,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Poin 7 — Auto-evaluasi sinyal lama yang belum punya outcome.
+
+    Cron-safe (bypass session_state via memory_store + _save_actual_to_sheets_cron).
+    Return dict: {evaluated, wins, losses, nt, suspended,
+                  memory_updates, details, skipped, error?}
+    """
+    import yfinance as yf
+    from config.calendar import hitung_hari_bursa
+
+    result = {
+        "evaluated": 0, "wins": 0, "losses": 0, "nt": 0, "suspended": 0,
+        "memory_updates": 0, "details": [], "skipped": [],
+    }
+
+    try:
+        riwayat = muat_riwayat_dari_sheets()
+        actual_map = muat_riwayat_actual()
+        memory_store = load_v12_memory() if not dry_run else {}
+
+        now_jkt = datetime.now(pytz.timezone("Asia/Jakarta"))
+        today = now_jkt.date()
+
+        for r in riwayat:
+            if result["evaluated"] + result["suspended"] >= max_eval:
+                break
+
+            waktu_str = str(r.get("Waktu", "")).strip()
+            saham = str(r.get("Saham", "")).strip().upper().replace(".JK", "")
+            gaya = str(r.get("Gaya", "SW")).strip().upper()
+
+            if not waktu_str or not saham:
+                continue
+            if "AVOID" in str(r.get("Sinyal", "")).upper():
+                continue
+
+            existing = (
+                actual_map.get((waktu_str, saham, gaya))
+                or actual_map.get((waktu_str, saham,
+                                   "swing" if gaya == "SW" else "daytrade"))
+            )
+            if existing and existing.get("Outcome"):
+                continue
+
+            try:
+                dt_signal = datetime.strptime(waktu_str.split()[0], "%Y-%m-%d").date()
+            except Exception:
+                result["skipped"].append(f"{saham} {gaya}: parse date")
+                continue
+
+            bdays = hitung_hari_bursa(dt_signal, today)
+            if bdays < min_bdays:
+                continue
+            if bdays > max_bdays:
+                result["suspended"] += 1
+                result["skipped"].append(f"{saham} {gaya}: timeout {bdays}bdays")
+                continue
+
+            entry_low, entry_high = _parse_price_range(r.get("Entry_Zone", ""))
+            tp_low, _ = _parse_price_range(
+                r.get("TP_Range", "") or r.get("TP_Harga", "")
+            )
+            sl = _parse_price_single(r.get("SL_Harga", ""))
+            if entry_low is None or entry_high is None:
+                result["skipped"].append(f"{saham} {gaya}: entry_zone unparseable")
+                continue
+
+            try:
+                # auto_adjust=False: pakai harga UNADJUSTED, konsisten dengan
+                # Entry_Zone/SL/TP di Sheets (dibuat saat itu = unadjusted).
+                # Kalau True (default), dividend/split adjust bisa bikin harga
+                # historis "terlihat lebih rendah" → false Loss.
+                df = yf.download(
+                    f"{saham}.JK", period="3mo", interval="1d",
+                    progress=False, auto_adjust=False,
+                )
+            except Exception as e:
+                result["skipped"].append(f"{saham} {gaya}: yf error {e}")
+                continue
+            if df is None or df.empty:
+                result["skipped"].append(f"{saham} {gaya}: yf empty")
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            try:
+                if getattr(df.index, "tz", None) is not None:
+                    df = df.copy()
+                    df.index = df.index.tz_localize(None)
+            except Exception:
+                pass
+
+            # Konservatif: mulai H+1 setelah hari sinyal.
+            # Menghindari lookahead bias dari bar hari sinyal yang sebagian
+            # besar terbentuk SEBELUM sinyal dibuat (mis. low pagi hari
+            # sebelum harga naik ke level sinyal).
+            # Lookahead guard (SQMI case):
+            #   - Sinyal post-market (>=16:00 WIB): trader entry H+1 → filter >
+            #   - Sinyal intraday (<16:00 WIB): boleh entry hari sinyal → filter >=
+            #     (accept small lookahead risk dari bar pagi, karena daily OHLC
+            #      tidak punya granularity intraday)
+            signal_hour = 16  # default conservative: treat as post-market
+            try:
+                _parts = waktu_str.split()
+                if len(_parts) >= 2:
+                    signal_dt_parse = datetime.strptime(
+                        f"{_parts[0]} {_parts[1]}", "%Y-%m-%d %H:%M"
+                    )
+                    signal_hour = signal_dt_parse.hour
+                else:
+                    signal_dt_parse = datetime.strptime(waktu_str, "%Y-%m-%d")
+                    signal_hour = 16
+            except Exception:
+                pass
+
+            if signal_hour >= 16:
+                df_future = df[df.index.date > dt_signal]
+            else:
+                df_future = df[df.index.date >= dt_signal]
+
+            if df_future.empty:
+                result["skipped"].append(f"{saham} {gaya}: no future bars")
+                continue
+
+            actual_high = float(df_future["High"].max())
+            actual_low = float(df_future["Low"].min())
+            actual_close = float(df_future["Close"].iloc[-1])
+            if actual_high <= 0 or actual_low <= 0:
+                result["skipped"].append(f"{saham} {gaya}: invalid OHLC")
+                continue
+
+            entry_miss = "Yes" if actual_low > entry_high else "No"
+            outcome = _determine_outcome(
+                entry_low, entry_high, tp_low, sl,
+                actual_high, actual_low, actual_close, entry_miss,
+            )
+            if outcome == "Suspended":
+                result["suspended"] += 1
+                continue
+
+            if not dry_run:
+                saved = _save_actual_to_sheets_cron(
+                    waktu=waktu_str, saham=saham, mode=gaya,
+                    actual_high=actual_high, actual_low=actual_low,
+                    actual_close=actual_close, outcome=outcome,
+                    entry_miss=entry_miss,
+                )
+                if not saved:
+                    result["skipped"].append(f"{saham} {gaya}: save fail")
+                    continue
+
+                integrate_actual_to_v12(
+                    waktu=waktu_str, saham=saham, mode=gaya,
+                    actual_data={
+                        "Actual_High": f"{actual_high:.0f}",
+                        "Actual_Low": f"{actual_low:.0f}",
+                        "Actual_Close": f"{actual_close:.0f}",
+                        "Outcome": outcome,
+                        "Entry_Miss": entry_miss,
+                    },
+                    memory_store=memory_store,
+                )
+
+            result["evaluated"] += 1
+            if outcome == "Win":           result["wins"] += 1
+            elif outcome == "Loss":        result["losses"] += 1
+            elif outcome == "Not Touched": result["nt"] += 1
+            entry_ref_for_report = entry_high if entry_high > 0 else entry_low
+            result["details"].append({
+                "ticker": saham, "mode": gaya, "outcome": outcome,
+                "bdays": bdays,
+                "entry_low": entry_low,
+                "entry_high": entry_high,
+                "actual_low": actual_low,
+                "actual_high": actual_high,
+                "actual_close": actual_close,
+                "entry_miss": entry_miss,
+                "actual_return": _compute_learning_return(
+                    entry_ref_for_report, outcome,
+                    actual_high, actual_low, actual_close,
+                ),
+            })
+
+        if not dry_run and result["evaluated"] > 0:
+            save_v12_memory(memory_store)
+            result["memory_updates"] = result["evaluated"]
+
+        return result
+
+    except Exception as e:
+        return {**result, "error": str(e)}
