@@ -160,12 +160,30 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     th_buy = _v12["th_buy"]
     th_hold = _v12["th_hold"]
     score_std = _v12["score_std"]
-    # 12-13. ENTRY / SL / TP — UNIFIED (core.entry_exit)
+    # 12-13. ENTRY / SL / TP — UNIFIED (core.entry_exit + Dual Entry Mode)
     if v12_mem is not None:
         mem_for_entry = v12_mem.get(ticker_raw, {})
     else:
         mem_for_entry = st.session_state.v12_memory.get(ticker_raw, {})
     entry_error = mem_for_entry.get('entry_error_ema', 0.0)
+
+    # ── Pre-compute input untuk entry_mode classifier ──
+    if is_daytrade:
+        _bpday_pre = bars_per_day_map.get(actual_interval, 64)
+        _res20_pre = (
+            float(df['High'].iloc[-_bpday_pre:-1].max())
+            if len(df) >= _bpday_pre else float(df['High'].max())
+        )
+    else:
+        _res20_pre = (
+            float(df['High'].iloc[-21:-1].max())
+            if len(df) >= 21 else float(df['High'].max())
+        )
+    _vol5_pre = df['Volume'].iloc[-5:].mean()
+    _vol20_pre = df['Volume'].iloc[-20:].mean()
+    _vol_surge_pct_pre = ((_vol5_pre / _vol20_pre) - 1) * 100 if _vol20_pre > 0 else 0.0
+    _is_breakout_pre = harga_terakhir > _res20_pre
+    _zscore_pre = float(df['ZScore'].iloc[-1]) if not pd.isna(df['ZScore'].iloc[-1]) else 0.0
 
     _ev = compute_entry_zone_and_sl_tp(
         last_price=harga_terakhir,
@@ -176,6 +194,11 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         entry_error=entry_error,
         fee_beli_pct=fee_beli_pct, fee_jual_pct=fee_jual_pct,
         bars_per_day=bars_per_day_map.get(actual_interval, 54),
+        # ── Dual Entry Mode inputs ──
+        vol_surge_pct=_vol_surge_pct_pre,
+        is_breakout=_is_breakout_pre,
+        zscore=_zscore_pre,
+        # setup_type=None — analyzer tidak punya setup_type dari scanner
     )
 
     entry_low        = _ev["entry_low"]
@@ -193,6 +216,8 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     tp_pct_low       = _ev["tp_pct_low"]
     tp_pct_high      = _ev["tp_pct_high"]
     rrr              = _ev["rrr"]
+    entry_mode_used  = _ev["entry_mode_used"]
+    entry_mode_reason = _ev["entry_mode_reason"]
 
     # DT downgrade filter (tidak berubah)
     DT_MIN_TARGET_PCT = 3.0
@@ -256,6 +281,7 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         fee_beli_pct=fee_beli_pct,
         fee_jual_pct=fee_jual_pct,
         annual_factor=_annual_factor,
+        is_daytrade=is_daytrade,
     )
 
     df = _bt["df"]
@@ -668,4 +694,7 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     result["prob_bull_30d"]    = prob_bull_30d
     result["estimasi_30d_label"] = estimasi_30d_label
     result["prob_30d_label"]     = prob_30d_label
+    # Dual Entry Mode audit (Poin 3)
+    result["entry_mode_used"] = entry_mode_used
+    result["entry_mode_reason"] = entry_mode_reason
     return result
