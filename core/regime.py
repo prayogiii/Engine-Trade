@@ -1,6 +1,6 @@
 """Rezim pasar & klasifikasi bar."""
 from __future__ import annotations
-
+from enum import Enum
 
 REGIME_INFO: dict[str, str] = {
     "Strong Bullish 🚀": "Tren naik kuat dengan momentum tinggi.",
@@ -16,7 +16,74 @@ REGIME_INFO: dict[str, str] = {
     "Sideways Bias Turun ↘️": "Sideways cenderung turun.",
     "Sideways Normal ↔️": "Sideways moderat, tunggu katalis.",
 }
+class RegimeKey(str, Enum):
+    """Bucket kanonik — .value IDENTIK dengan key _REGIME_DEFAULTS di scoring.py."""
+    STABLE_BULLISH       = "STABLE BULLISH"
+    VOLATILE_UPTREND     = "VOLATILE UPTREND"
+    HIGH_STRESS_PANIC    = "HIGH-STRESS PANIC"
+    SIDEWAYS             = "SIDEWAYS / CONSOLIDATION"
+    BEARISH_ACCUMULATION = "BEARISH ACCUMULATION"
 
+
+# Sumber tunggal kebenaran: display-label / legacy-key → bucket kanonik.
+_REGIME_ALIASES: dict[str, RegimeKey] = {
+    # ── Label tampilan ber-emoji (output get_regime_row) ──
+    "Strong Bullish 🚀":        RegimeKey.STABLE_BULLISH,
+    "Bullish 📈":               RegimeKey.STABLE_BULLISH,
+    "Panic Sell 🚨":            RegimeKey.HIGH_STRESS_PANIC,
+    "Bearish 🔻":               RegimeKey.HIGH_STRESS_PANIC,
+    "Early Recovery 🔄":        RegimeKey.VOLATILE_UPTREND,
+    "Distribution 📉":          RegimeKey.HIGH_STRESS_PANIC,
+    "Konsolidasi Tren ↔️":      RegimeKey.SIDEWAYS,
+    "Bullish Accumulation 🏗️":  RegimeKey.STABLE_BULLISH,
+    "Bearish Accumulation 🧊":  RegimeKey.BEARISH_ACCUMULATION,
+    "Sideways Bias Naik ↗️":    RegimeKey.SIDEWAYS,
+    "Sideways Bias Turun ↘️":   RegimeKey.SIDEWAYS,
+    "Sideways Normal ↔️":       RegimeKey.SIDEWAYS,
+
+    # ── Legacy / kanonik (passthrough, jaga kompatibilitas Sheets) ──
+    "STABLE BULLISH":           RegimeKey.STABLE_BULLISH,
+    "VOLATILE UPTREND":         RegimeKey.VOLATILE_UPTREND,
+    "HIGH-STRESS PANIC":        RegimeKey.HIGH_STRESS_PANIC,
+    "SIDEWAYS / CONSOLIDATION": RegimeKey.SIDEWAYS,
+    "BEARISH ACCUMULATION":     RegimeKey.BEARISH_ACCUMULATION,
+
+    # ── Short-form yang mungkin dipakai caller kode (termasuk bug lama) ──
+    "SIDEWAYS":                 RegimeKey.SIDEWAYS,
+    "BULLISH":                  RegimeKey.STABLE_BULLISH,
+    "BEARISH":                  RegimeKey.HIGH_STRESS_PANIC,
+}
+
+
+def normalize_regime_key(regime) -> RegimeKey:
+    """Normalisasi label rezim apa pun → RegimeKey kanonik.
+
+    Terima: RegimeKey | str (emoji / legacy / short-form) | None.
+    Fail-safe: default ke SIDEWAYS jika tidak dikenali (jangan crash).
+    """
+    if isinstance(regime, RegimeKey):
+        return regime
+    if not regime:
+        return RegimeKey.SIDEWAYS
+
+    s = str(regime).strip()
+    if s in _REGIME_ALIASES:
+        return _REGIME_ALIASES[s]
+
+    # case-insensitive retry (data Sheets historis kadang beda kapitalisasi)
+    lower = s.lower()
+    for alias, key in _REGIME_ALIASES.items():
+        if alias.lower() == lower:
+            return key
+
+    # fallback substring — urutan penting: 'panic' → 'accum' → 'bear' → 'bull'
+    if "panic" in lower:                          return RegimeKey.HIGH_STRESS_PANIC
+    if "accum" in lower and "bear" in lower:      return RegimeKey.BEARISH_ACCUMULATION
+    if "accum" in lower:                          return RegimeKey.STABLE_BULLISH
+    if "bear" in lower:                           return RegimeKey.HIGH_STRESS_PANIC
+    if "bull" in lower:                           return RegimeKey.STABLE_BULLISH
+    if "uptrend" in lower or "recovery" in lower: return RegimeKey.VOLATILE_UPTREND
+    return RegimeKey.SIDEWAYS
 
 def get_regime_row(row, adx_threshold: float, mom_median_th: float,
                    z_oversold_th: float = -1.5) -> tuple[str, str]:
