@@ -5,6 +5,7 @@ Menggabungkan:
   - Sumber berita (RSS, scraping)
   - Relevancy filter (3 tier: strict → medium → fallback)
   - Sentiment scoring (IDX Fin-Lexicon + VADER blended)
+  - Time-decay weighting (Poin 5 notes): berita baru dominan, berita lama pudar
 """
 from __future__ import annotations
 
@@ -53,6 +54,39 @@ try:
 except ImportError:
     TRANSLATOR_AVAILABLE = False
     GoogleTranslator = None
+
+
+# ═══════════════════════════════════════════════════════════════
+# TIME-DECAY CONFIG (Poin 5 notes)
+# ═══════════════════════════════════════════════════════════════
+NEWS_HARD_CUTOFF_DAYS = 7          # berita >7 hari: weight = 0 (discard)
+NEWS_DECAY_HALF_LIFE_HOURS = 36.0  # weight 0.5 setelah 36 jam
+NEWS_FETCH_LOOKBACK_DAYS = 14      # fetch 14 hari (buffer untuk decay)
+
+
+def _time_decay_weight(
+    published_ts: float,
+    now_ts: float | None = None,
+    half_life_hours: float = NEWS_DECAY_HALF_LIFE_HOURS,
+    hard_cutoff_days: float = NEWS_HARD_CUTOFF_DAYS,
+) -> float:
+    """
+    Bobot time-decay eksponensial.
+
+    - Berita baru (0 jam):      weight ≈ 1.0
+    - Berita 36 jam:            weight ≈ 0.5   (half_life)
+    - Berita 72 jam (2 half):   weight ≈ 0.25
+    - Berita > hard_cutoff:     weight = 0.0   (discard)
+    - Tanpa timestamp (ts<=0):  weight = 0.3   (fallback konservatif)
+    """
+    if published_ts <= 0:
+        return 0.3
+    if now_ts is None:
+        now_ts = time.time()
+    age_hours = max(0.0, (now_ts - published_ts) / 3600.0)
+    if age_hours > hard_cutoff_days * 24.0:
+        return 0.0
+    return 0.5 ** (age_hours / half_life_hours)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -199,7 +233,7 @@ def filter_relevant(news_list, ticker, ticker_info=None):
 # ═══════════════════════════════════════════════════════════════
 # NEWS SOURCES
 # ═══════════════════════════════════════════════════════════════
-def get_google_news_rss(query_str, num=5, days_back=7, lang="id"):
+def get_google_news_rss(query_str, num=5, days_back=NEWS_FETCH_LOOKBACK_DAYS, lang="id"):
     """Ambil berita dari Google News RSS, FILTER TANGGAL MANUAL."""
     if not RSS_AVAILABLE:
         return [], "RSS tidak tersedia"
@@ -219,7 +253,7 @@ def get_google_news_rss(query_str, num=5, days_back=7, lang="id"):
                 f"https://news.google.com/rss/search?"
                 f"q={urllib.parse.quote(query_with_date)}&hl=id&gl=ID&ceid=ID:id"
             )
-        feed = feedparser.parse(url)   # ← KUNCI: langsung URL, bukan requests.get
+        feed = feedparser.parse(url)
 
         news = []
         for e in feed.entries[:num * 3]:
@@ -327,12 +361,10 @@ def get_sector_catalyst(ticker: str, ticker_info: dict | None = None) -> dict | 
     if not ticker_clean:
         return None
 
-    # 1. Cek direct match di ticker list
     for key, data in SECTOR_CATALYSTS.items():
         if ticker_clean in data["tickers"]:
             return {"key": key, "label": data["label"], "query": data["query"]}
 
-    # 2. Fallback: Cocokkan berdasarkan 'sector' / 'industry' yfinance
     if ticker_info and isinstance(ticker_info, dict):
         sector = (ticker_info.get("sector") or "").lower()
         industry = (ticker_info.get("industry") or "").lower()
@@ -353,7 +385,7 @@ def get_sector_catalyst(ticker: str, ticker_info: dict | None = None) -> dict | 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_global_sector_news(category_label: str, query_str: str, num: int = 2, days_back: int = 14) -> list[dict]:
-    """Ambil berita sektor/komoditas global dalam bahasa Inggris via Google News US RSS (di-cache per sektor)."""
+    """Ambil berita sektor/komoditas global dalam bahasa Inggris via Google News US RSS."""
     if not RSS_AVAILABLE:
         return []
     try:
@@ -367,7 +399,7 @@ def get_global_sector_news(category_label: str, query_str: str, num: int = 2, da
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _fetch_rss_news(feed_url, ticker, num=5, days_back=7, ticker_info=None):
+def _fetch_rss_news(feed_url, ticker, num=5, days_back=NEWS_FETCH_LOOKBACK_DAYS, ticker_info=None):
     if not RSS_AVAILABLE:
         return []
     try:
@@ -427,7 +459,7 @@ def get_kontan_news(ticker, num=5, ticker_info=None):
     """Kontan RSS 403 → fallback ke Google News."""
     try:
         query = f'"{ticker}" (saham OR emiten OR dividen OR laba) site:kontan.co.id'
-        news, err = get_google_news_rss(query, num=num, days_back=14)
+        news, err = get_google_news_rss(query, num=num, days_back=NEWS_FETCH_LOOKBACK_DAYS)
         for n in news:
             n["source"] = "Kontan (Google News)"
         return news, None
@@ -480,7 +512,10 @@ def get_ipot_news(query, num=5):
             if query_low not in t.lower():
                 continue
             if not any(n["title"] == t for n in news):
-                news.append({"title": t, "summary": "", "source": "Ipotnews"})
+                news.append({
+                    "title": t, "summary": "",
+                    "source": "Ipotnews", "published": "", "published_ts": 0,
+                })
             if len(news) >= num:
                 break
         return news, None
@@ -513,7 +548,8 @@ def get_headlines_for_ticker(ticker, include_global=True):
 
         all_news = []
         for q in _queries:
-            n, _ = get_google_news_rss(q, num=10, days_back=30)
+            # Poin 5: fetch 14 hari (bukan 30), decay otomatis akan cutoff di 7 hari
+            n, _ = get_google_news_rss(q, num=10, days_back=NEWS_FETCH_LOOKBACK_DAYS)
             if n:
                 all_news.extend(n)
 
@@ -536,7 +572,6 @@ def get_headlines_for_ticker(ticker, include_global=True):
         elif unique:
             results = [n["title"] for n in unique[:2]]
 
-        # Sisipkan berita sektor/komoditas global jika tersedia
         if include_global:
             catalyst = get_sector_catalyst(ticker_clean, _info)
             if catalyst:
@@ -546,14 +581,13 @@ def get_headlines_for_ticker(ticker, include_global=True):
 
         if results:
             return results[:3]
-        else:
-            return ["(tidak ada berita terbaru)"]
+        return ["(tidak ada berita terbaru)"]
     except Exception:
         return ["(gagal mengambil berita)"]
 
 
 # ═══════════════════════════════════════════════════════════════
-# SENTIMENT ANALYSIS
+# SENTIMENT ANALYSIS (dengan time-decay)
 # ═══════════════════════════════════════════════════════════════
 def _score_lexicon_idxfin(text_lower: str):
     matches = []
@@ -572,38 +606,117 @@ def _score_lexicon_idxfin(text_lower: str):
     return float(np.clip(weighted, -1.0, 1.0)), True
 
 
-def analyze_sentiment_weighted(news_items, translator):
-    if not _ensure_sentiment():
-        return 0.0
-    from nltk.sentiment import SentimentIntensityAnalyzer
+def _extract_gemini_sentiment(headlines: list[str]) -> list[dict]:
+    """
+    Wrapper aman untuk Gemini extraction — mudah dimock, fail-safe.
+    Return [] kalau Gemini tidak tersedia / disabled / error.
+    """
+    import os
+    if os.getenv("DISABLE_GEMINI_NEWS", "").lower() in ("1", "true", "yes"):
+        return []
+    try:
+        from services.gemini_client import extract_news_sentiment_gemini
+        return extract_news_sentiment_gemini(headlines, max_headlines=3)
+    except Exception:
+        return []
+
+
+def analyze_sentiment_weighted(news_items, translator, now_ts=None, use_gemini=True):
+    """
+    Sentiment aggregation dengan time-decay + optional Gemini extraction.
+
+    Blend priorities per headline:
+      - Gemini + lexicon + VADER tersedia → 0.5·G + 0.3·L + 0.2·V (normalized)
+      - Tanpa Gemini (fallback)          → 0.6·L + 0.4·V (seperti sebelumnya)
+      - Hanya lexicon                    → L
+      - Hanya VADER                      → V
+      - Tidak ada sinyal                 → skip item
+
+    Gemini confidence < 0.4 → dianggap tidak ada sinyal (tidak dipakai).
+    """
     if not news_items:
         return 0.0
-    analyzer = SentimentIntensityAnalyzer()
-    total_w, w_sum = 0, 0
-    for i, item in enumerate(news_items):
-        text = f"{item['title']}. {item['summary']}" if item["summary"] else item["title"]
-        text_for_lexicon = text.lower()
 
-        lex_score, has_lex = _score_lexicon_idxfin(text_for_lexicon)
-
-        _ID_WORDS = re.compile(
-            r"\b(yang|dan|di|ke|dari|untuk|dengan|pada|ini|itu|akan|telah|saham|harga|naik|turun)\b",
-            re.IGNORECASE,
-        )
-
-        if translator and _ID_WORDS.search(text):
+    # ── Coba Gemini untuk top-3 headline (opsional, fail-safe) ──
+    gemini_results: list[dict] = []
+    if use_gemini:
+        top_titles = [(n.get("title") or "").strip() for n in news_items[:3]]
+        if any(t for t in top_titles):
             try:
-                text = translator.translate(text)
+                gemini_results = _extract_gemini_sentiment(top_titles)
             except Exception:
-                pass
-        vader_score = analyzer.polarity_scores(text)["compound"]
+                gemini_results = []  # fail-safe: jangan crash kalau extractor error
 
+    analyzer = None
+    if _ensure_sentiment():
+        from nltk.sentiment import SentimentIntensityAnalyzer
+        analyzer = SentimentIntensityAnalyzer()
+
+    _ID_WORDS = re.compile(
+        r"\b(yang|dan|di|ke|dari|untuk|dengan|pada|ini|itu|akan|telah|saham|harga|naik|turun)\b",
+        re.IGNORECASE,
+    )
+
+    total_w = 0.0
+    w_sum = 0.0
+
+    for i, item in enumerate(news_items):
+        title = (item.get("title") or "").strip()
+        summary = (item.get("summary") or "").strip()
+        text = f"{title}. {summary}" if summary else title
+        if not text.strip():
+            continue
+
+        lex_score, has_lex = _score_lexicon_idxfin(text.lower())
+
+        vader_score = 0.0
+        vader_used = False
+        if analyzer is not None:
+            translated_text = text
+            if translator and _ID_WORDS.search(text):
+                try:
+                    translated_text = translator.translate(text)
+                except Exception:
+                    pass
+            try:
+                vader_score = analyzer.polarity_scores(translated_text)["compound"]
+                vader_used = True
+            except Exception:
+                vader_used = False
+
+        # ── Gemini signal (kalau hasil valid & confidence cukup) ──
+        gemini_signal = None
+        if i < len(gemini_results):
+            gr = gemini_results[i]
+            if (not gr.get("_fallback")
+                    and gr.get("confidence", 0.0) >= 0.4):
+                gemini_signal = float(gr.get("sentiment", 0.0))
+
+        # ── Blend berbobot dengan renormalization otomatis ──
+        components = []
+        if gemini_signal is not None:
+            components.append((gemini_signal, 0.5))
         if has_lex:
-            final_score = 0.6 * lex_score + 0.4 * vader_score
-        else:
-            final_score = vader_score
+            components.append((lex_score, 0.3))
+        if vader_used:
+            components.append((vader_score, 0.2))
 
-        weight = 1 / (i + 1)
+        if not components:
+            continue  # tidak ada sinyal sama sekali
+
+        total_comp_w = sum(w for _, w in components)
+        final_score = sum(s * w for s, w in components) / total_comp_w
+
+        # ── Time-decay weight ──
+        published_ts = item.get("published_ts", 0)
+        time_w = _time_decay_weight(published_ts, now_ts)
+        if time_w <= 0:
+            continue  # berita > hard_cutoff
+
+        position_w = 1.0 / (i + 1)
+        weight = time_w * (0.9 + 0.1 * position_w)
+
         w_sum += final_score * weight
         total_w += weight
+
     return w_sum / total_w if total_w > 0 else 0.0
