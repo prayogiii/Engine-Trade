@@ -157,3 +157,46 @@ def safe_float(value, default=0.0):
         return float(value)
     except (ValueError, TypeError):
         return default
+def compute_ofi_enhanced(df, window: int = 20):
+    """
+    Enhanced Order Flow Imbalance — shadow-weighted directional volume.
+
+    FIX: bayangan candle dihitung sesuai jenis candle.
+      - Green (Close >= Open): upper = High - Close, lower = Open - Low
+      - Red   (Close <  Open): upper = High - Open,  lower = Close - Low
+    (Bug lama: High-Close & Open-Low untuk semua candle → merah marubozu
+     menghasilkan lower_ratio ≈ 1 → delta ≈ 0, padahal tekanan jual masif.)
+
+    OFI_Enhanced = rolling_sum(Delta_Enhanced, window) / rolling_sum(Volume, window)
+      → naturally bounded [-1, 1], interpretable sebagai
+        "net directional flow over last N bars, as fraction of total volume".
+
+    Returns DataFrame [Upper_Shadow_Ratio, Lower_Shadow_Ratio,
+                       Delta_Enhanced, OFI_Enhanced] sejajar index df.
+    """
+    is_green = df['Close'] >= df['Open']
+    upper_shadow = np.where(is_green, df['High'] - df['Close'], df['High'] - df['Open'])
+    lower_shadow = np.where(is_green, df['Open'] - df['Low'],  df['Close'] - df['Low'])
+
+    full_range = (df['High'] - df['Low']).replace(0, np.nan)
+
+    upper_ratio = (upper_shadow / full_range).fillna(0.0).clip(0.0, 1.0)
+    lower_ratio = (lower_shadow / full_range).fillna(0.0).clip(0.0, 1.0)
+
+    delta_enhanced = np.where(
+        is_green,
+        df['Volume'] * (1 - upper_ratio),
+        -df['Volume'] * (1 - lower_ratio),
+    )
+    delta_series = pd.Series(delta_enhanced, index=df.index, dtype='float64')
+
+    vol_sum = df['Volume'].rolling(window, min_periods=5).sum()
+    delta_sum = delta_series.rolling(window, min_periods=5).sum()
+    ofi = (delta_sum / (vol_sum + 1e-9)).clip(-1.0, 1.0).fillna(0.0)
+
+    return pd.DataFrame({
+        'Upper_Shadow_Ratio': upper_ratio,
+        'Lower_Shadow_Ratio': lower_ratio,
+        'Delta_Enhanced':     delta_series,
+        'OFI_Enhanced':       ofi,
+    }, index=df.index)
