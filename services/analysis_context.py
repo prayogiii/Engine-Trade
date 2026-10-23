@@ -30,7 +30,7 @@ from services.news_client import (
     get_google_news_rss, get_kontan_news, get_cnbc_rss_news, get_ipot_news,
     filter_relevant, analyze_sentiment_weighted,
     get_sector_catalyst, get_global_sector_news,
-    TRANSLATOR_AVAILABLE, GoogleTranslator,
+    TRANSLATOR_AVAILABLE, GoogleTranslator, NEWS_FETCH_LOOKBACK_DAYS,
 )
 
 
@@ -150,7 +150,8 @@ def load_news_and_sentiment(ticker_raw: str, ticker_info: dict) -> dict:
 
     rss_all = []
     for _q in _queries:
-        _r, _ = get_google_news_rss(_q, num=10, days_back=30)
+        # Poin 5: fetch 14 hari (bukan 30). Decay otomatis cutoff di 7 hari.
+        _r, _ = get_google_news_rss(_q, num=10, days_back=NEWS_FETCH_LOOKBACK_DAYS)
         if _r:
             rss_all.extend(_r)
 
