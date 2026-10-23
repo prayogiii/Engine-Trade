@@ -11,6 +11,9 @@ from core.riwayat import (
 )
 
 
+# Semua tanggal di test menggunakan format "YYYY-MM-DD" dan berada >=
+# MIN_VALID_DATE ("2026-08-18") agar tidak tersaring oleh _is_misaligned().
+
 class TestHitungStatistik:
     def test_empty(self):
         assert hitung_statistik_riwayat_actual({}) is None
@@ -18,8 +21,8 @@ class TestHitungStatistik:
 
     def test_all_wins(self):
         actual = {
-            ("2026-01-01", "BBRI", "SW"): {"Outcome": "Win", "Mode": "SW"},
-            ("2026-01-02", "TLKM", "SW"): {"Outcome": "Win", "Mode": "SW"},
+            ("2026-09-01", "BBRI", "SW"): {"Outcome": "Win", "Mode": "SW"},
+            ("2026-09-02", "TLKM", "SW"): {"Outcome": "Win", "Mode": "SW"},
         }
         result = hitung_statistik_riwayat_actual(actual)
         assert result["total_win"] == 2
@@ -27,9 +30,9 @@ class TestHitungStatistik:
 
     def test_mixed_with_nt(self):
         actual = {
-            ("a", "BBRI", "SW"): {"Outcome": "Win", "Mode": "SW"},
-            ("b", "TLKM", "SW"): {"Outcome": "Loss", "Mode": "SW"},
-            ("c", "ASII", "SW"): {"Outcome": "Not Touched", "Mode": "SW"},
+            ("2026-09-01 10:00", "BBRI", "SW"): {"Outcome": "Win", "Mode": "SW"},
+            ("2026-09-02 10:00", "TLKM", "SW"): {"Outcome": "Loss", "Mode": "SW"},
+            ("2026-09-03 10:00", "ASII", "SW"): {"Outcome": "Not Touched", "Mode": "SW"},
         }
         result = hitung_statistik_riwayat_actual(actual)
         assert result["total_win"] == 1
@@ -38,6 +41,17 @@ class TestHitungStatistik:
         assert result["win_rate"] == 50.0
         assert result["win_rate_honest"] == pytest.approx(33.33, rel=0.01)
 
+    def test_misaligned_dates_are_skipped(self):
+        """Kontrak: data < MIN_VALID_DATE (2026-08-18) sengaja di-skip."""
+        actual = {
+            ("2026-01-01", "BBRI", "SW"): {"Outcome": "Win", "Mode": "SW"},
+            ("2026-09-01", "TLKM", "SW"): {"Outcome": "Win", "Mode": "SW"},
+        }
+        result = hitung_statistik_riwayat_actual(actual)
+        # Hanya baris 2026-09-01 yang dihitung
+        assert result["total_win"] == 1
+        assert result["total_all"] == 1
+
 
 class TestWinrateTicker:
     def test_no_data(self):
@@ -45,9 +59,9 @@ class TestWinrateTicker:
 
     def test_ticker_filter(self):
         actual = {
-            ("2026-01-01", "BBRI", "SW"): {"Outcome": "Win"},
-            ("2026-01-02", "TLKM", "SW"): {"Outcome": "Loss"},
-            ("2026-01-03", "BBRI", "SW"): {"Outcome": "Loss"},
+            ("2026-09-01", "BBRI", "SW"): {"Outcome": "Win"},
+            ("2026-09-02", "TLKM", "SW"): {"Outcome": "Loss"},
+            ("2026-09-03", "BBRI", "SW"): {"Outcome": "Loss"},
         }
         result = hitung_winrate_ticker_actual("BBRI", actual)
         assert result["total"] == 2
@@ -100,7 +114,7 @@ class TestDapatkanSwingAktif:
 class TestSinyalPerluDicatat:
     def test_avoid_skipped(self):
         riwayat = [{
-            "Waktu": "2026-01-01 10:00", "Saham": "BBRI",
+            "Waktu": "2026-09-01 10:00", "Saham": "BBRI",
             "Gaya": "SW", "Sinyal": "AVOID",
         }]
         urgent, active = dapatkan_sinyal_perlu_dicatat(riwayat, {})
