@@ -44,7 +44,7 @@ from core.entry_exit import compute_entry_zone_and_sl_tp
 
 def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
                   sudah_beli, harga_beli_float,
-                  is_daytrade, v12_mem=None, fee_beli_pct=0.15, fee_jual_pct=0.25):
+                  is_daytrade, v12_mem=None, fee_beli_pct=0.15, fee_jual_pct=0.25, waktu_analisis=None):
     """
     Menjalankan analisis lengkap untuk satu mode (swing/daytrade).
     Mengembalikan dictionary hasil atau None jika data tidak cukup.
@@ -536,7 +536,7 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
 
     # 18. RINGKASAN UNTUK RIWAYAT
     ringkasan = {
-        "Waktu": datetime.now(pytz.timezone("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M"),
+        "Waktu": waktu_analisis if waktu_analisis else datetime.now(pytz.timezone("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M"),
         "Saham": ticker_raw,
         "Harga": f"{harga_terakhir:,.0f}",
         "Sinyal": signal,
