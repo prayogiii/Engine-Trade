@@ -772,10 +772,30 @@ def display_analysis_result(res):
             st.caption(mem_insight)
 
             entry_err = mem.get('entry_error_ema', 0.0)
+
+            # Hitung NT aktual untuk ticker ini dari riwayat_actual
+            nt_ticker = 0
+            for _k, _val in st.session_state.get('riwayat_actual', {}).items():
+                if isinstance(_k, tuple) and len(_k) >= 2:
+                    _saham_k = str(_k[1]).replace('.JK', '').strip().upper()
+                    if _saham_k == ticker_raw.upper():
+                        _out = str(_val.get('Outcome', '')).strip()
+                        _em  = str(_val.get('Entry_Miss', '')).strip()
+                        if _out.upper() in ('NOT TOUCHED', 'NOT_TOUCHED') or _em == 'Yes':
+                            nt_ticker += 1
+
             if entry_err > 0:
                 st.caption(
-                    f"🎯 **Rata‑rata error entry:** {entry_err:.2f} poin. "
-                    "Entry sering tidak tersentuh, engine akan menggeser zona entry lebih dekat ke harga."
+                    f"🎯 **Rata‑rata error entry:** {entry_err:.2f} poin "
+                    f"(dari {nt_ticker} Not Touched). "
+                    "Engine akan menggeser zona entry lebih dekat ke harga."
+                )
+            elif nt_ticker > 0:
+                st.warning(
+                    f"🎯 **Error entry masih 0** padahal ada **{nt_ticker} data Not Touched** "
+                    f"untuk {ticker_raw} di database. "
+                    "Kemungkinan prediksi V12 belum tersimpan saat outcome dicatat — "
+                    "lakukan analisis ulang untuk memproses data ini."
                 )
             else:
                 st.caption("🎯 **Error entry:** 0 — entry zone sudah cukup baik atau belum ada data Not Touched.")
