@@ -103,7 +103,6 @@ if "riwayat" not in st.session_state:
 if "riwayat_actual" not in st.session_state:
     st.session_state.riwayat_actual = muat_riwayat_actual()
 
-
 # ═══════════════════════════════════════════════════════════════
 # EVALUASI SIGNAL PENDING — time-based (tiap 1 jam), bukan once-per-session
 # ═══════════════════════════════════════════════════════════════
