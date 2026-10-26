@@ -1192,63 +1192,91 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing",
     try:
         ticker = saham
         last_pred = load_v12_predictions(ticker, mode=mode)
-        if not last_pred:
-            return
 
+        # Ekstrak factor_signals (hanya kalau last_pred ada)
         factor_signals = {}
-        for k in FACTOR_KEYS:
-            key = f'sig_{k}'
-            if key in last_pred:
-                factor_signals[k] = safe_float(last_pred[key], 0.0)
-            else:
-                factor_signals[k] = 0.0
-
-        _vol = factor_signals.get('_volatility', 0.02)
+        _vol = 0.02
+        if last_pred:
+            for k in FACTOR_KEYS:
+                key = f'sig_{k}'
+                if key in last_pred:
+                    factor_signals[k] = safe_float(last_pred[key], 0.0)
+                else:
+                    factor_signals[k] = 0.0
+            _vol = factor_signals.get('_volatility', 0.02)
 
         # ═══ PRIORITAS 1: Entry Miss / Not Touched ═══
         entry_miss = str(actual_data.get('Entry_Miss', '')).strip() == 'Yes'
         outcome_raw = str(actual_data.get('Outcome', '')).strip().upper()
 
         if entry_miss or outcome_raw in ('NOT TOUCHED', 'SUSPENDED'):
-            entry_low = last_pred.get('entry_low')
-            entry_high = last_pred.get('entry_high')
-            if entry_low is not None and entry_high is not None:
-                try:
-                    entry_low_f = safe_float(entry_low, None)
-                    entry_high_f = safe_float(entry_high, None)
-                except Exception:
-                    entry_low_f, entry_high_f = None, None
+            gap = None
 
-                if entry_low_f and entry_high_f and entry_low_f < entry_high_f:
-                    gap = None
-                    actual_low_str = actual_data.get('Actual_Low', '')
-                    if actual_low_str:
-                        try:
-                            actual_low_f = _to_float(actual_low_str)
-                            if actual_low_f > entry_high_f:
-                                gap = actual_low_f - entry_high_f
-                        except Exception:
-                            pass
+            # --- Coba hitung gap dari entry_high vs actual_low (pakai last_pred jika ada) ---
+            if last_pred:
+                entry_low = last_pred.get('entry_low')
+                entry_high = last_pred.get('entry_high')
+                if entry_low is not None and entry_high is not None:
+                    try:
+                        entry_low_f = safe_float(entry_low, None)
+                        entry_high_f = safe_float(entry_high, None)
+                    except Exception:
+                        entry_low_f, entry_high_f = None, None
 
-                    if gap is None:
-                        last_close = safe_float(last_pred.get('close_price'), 0.0)
-                        if last_close > entry_high_f:
-                            gap = last_close - entry_high_f
-                        else:
-                            gap = entry_high_f * 0.01
+                    if entry_low_f and entry_high_f and entry_low_f < entry_high_f:
+                        actual_low_str = actual_data.get('Actual_Low', '')
+                        if actual_low_str:
+                            try:
+                                actual_low_f = _to_float(actual_low_str)
+                                if actual_low_f > entry_high_f:
+                                    gap = actual_low_f - entry_high_f
+                            except Exception:
+                                pass
 
-                    if gap and gap > 0:
-                        store = (
-                            memory_store if memory_store is not None
-                            else st.session_state.v12_memory
-                        )
-                        mem = store.get(ticker, {})
-                        old_err = mem.get("entry_error_ema", 0.0)
-                        mem["entry_error_ema"] = compute_entry_error_update(old_err, gap)
-                        store[ticker] = mem
-                        # Cron: batch save di caller. UI: save langsung.
-                        if memory_store is None:
-                            save_v12_memory(store)
+                        if gap is None:
+                            last_close = safe_float(last_pred.get('close_price'), 0.0)
+                            if last_close > entry_high_f:
+                                gap = last_close - entry_high_f
+                            else:
+                                gap = entry_high_f * 0.01  # fallback minimum
+
+            # --- Fallback jika last_pred None: pakai Actual_Low vs Actual_Close ---
+            if gap is None:
+                actual_low_str = actual_data.get('Actual_Low', '')
+                actual_close_str = actual_data.get('Actual_Close', '')
+                if actual_low_str and actual_close_str:
+                    try:
+                        al = _to_float(actual_low_str)
+                        ac = _to_float(actual_close_str)
+                        if al > 0 and ac > 0:
+                            # Estimasi gap: close minus low sebagai proxy entry miss distance
+                            gap = max(ac - al, ac * 0.005)  # minimal 0.5% dari close
+                    except Exception:
+                        pass
+                elif actual_close_str:
+                    try:
+                        ac = _to_float(actual_close_str)
+                        if ac > 0:
+                            gap = ac * 0.01  # 1% proxy kalau tidak ada data lengkap
+                    except Exception:
+                        pass
+
+            if gap and gap > 0:
+                store = (
+                    memory_store if memory_store is not None
+                    else st.session_state.v12_memory
+                )
+                mem = store.get(ticker, {})
+                old_err = mem.get("entry_error_ema", 0.0)
+                mem["entry_error_ema"] = compute_entry_error_update(old_err, gap)
+                store[ticker] = mem
+                # Cron: batch save di caller. UI: save langsung.
+                if memory_store is None:
+                    save_v12_memory(store)
+            return
+
+        # Jika tidak ada last_pred dan bukan NT/suspended, tidak ada yang bisa dipelajari
+        if not last_pred:
             return
 
         # ═══ PRIORITAS 2: Win/Loss → hitung alpha RIIL (bukan ±0.03) ═══
