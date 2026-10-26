@@ -712,11 +712,6 @@ def hapus_riwayat_item(waktu, saham, gaya=None):
 
 def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
                           on_update_callback=None, memory_store=None):
-    """
-    Simpan outcome actual ke riwayat_actual + trigger V12 learning.
-    on_update_callback: optional callable(waktu, saham, actual_data, mode) → dijalankan
-                        sebelum mark V12_Consumed=Yes (untuk inject `integrate_actual_to_v12`).
-    """
     def norm_gaya(val):
         v = str(val).strip().lower()
         if v in ("sw", "swing"):
@@ -748,7 +743,6 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
                 records = sheet.get_all_records()
 
         row_index = None
-        v12_consumed = "No"
         target_mode_norm = norm_gaya(mode)
         for i, row in enumerate(records):
             r_mode = row.get("Mode") or row.get("Gaya") or ""
@@ -756,7 +750,6 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
                     and str(row.get("Saham")) == str(saham)
                     and norm_gaya(r_mode) == target_mode_norm):
                 row_index = i + 2
-                v12_consumed = str(row.get("V12_Consumed", "No")).strip()
                 break
 
         new_row = [
@@ -773,20 +766,21 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
         else:
             sheet.insert_row(new_row, index=2, value_input_option="RAW")
 
-        # Poin 7: cron context tidak punya session_state — fail-safe.
         try:
             st.session_state.riwayat_actual = muat_riwayat_actual()
         except Exception:
             pass
 
-        if v12_consumed != "Yes":
-            if on_update_callback is not None:
-                on_update_callback(waktu, saham, actual_data, mode)
-            if row_index:
-                sheet.update(f"I{row_index}", [["Yes"]], value_input_option="RAW")
-            else:
-                # Row baru ada di index 2 (baru di-insert)
-                sheet.update("I2", [["Yes"]], value_input_option="RAW")
+        # ═══ PERBAIKAN: SELALU PANGGIL CALLBACK JIKA ADA ═══
+        if on_update_callback is not None:
+            on_update_callback(waktu, saham, actual_data, mode)
+            
+        # Tandai V12_Consumed = Yes
+        if row_index:
+            sheet.update(f"I{row_index}", [["Yes"]], value_input_option="RAW")
+        else:
+            sheet.update("I2", [["Yes"]], value_input_option="RAW")
+            
     except Exception as e:
         st.error(f"Gagal menyimpan actual: {e}")
 
