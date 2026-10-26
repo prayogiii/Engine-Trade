@@ -1345,20 +1345,6 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing",
 # REPAIR: Backfill entry_error_ema dari data NT yang sudah ada
 # ═══════════════════════════════════════════════════════════════
 def repair_entry_error_ema(dry_run: bool = False) -> dict:
-    """
-    Scan SEMUA baris riwayat_actual (termasuk V12_Consumed=Yes) yang
-    Outcome=Not Touched atau Entry_Miss=Yes, lalu update entry_error_ema
-    di v12_memory untuk setiap ticker yang terdampak.
-
-    Diperlukan untuk backfill data lama yang tidak ter-update akibat bug
-    'if not last_pred: return' di integrate_actual_to_v12 versi lama.
-
-    Aman dijalankan berkali-kali (EMA, bukan additive), tapi idealnya
-    cukup sekali setelah deploy fix.
-
-    Returns:
-        dict: {processed, updated_tickers, skipped, dry_run}
-    """
     result = {"processed": 0, "updated_tickers": {}, "skipped": [], "dry_run": dry_run}
 
     try:
@@ -1368,7 +1354,6 @@ def repair_entry_error_ema(dry_run: bool = False) -> dict:
         result["error"] = str(e)
         return result
 
-    # Kumpulkan update per ticker (hindari multiple write)
     ticker_gaps: dict[str, list[float]] = {}
 
     for row in records:
@@ -1383,7 +1368,6 @@ def repair_entry_error_ema(dry_run: bool = False) -> dict:
             result["skipped"].append("baris tanpa saham")
             continue
 
-        # Hitung gap dari actual data
         gap = None
         actual_low_str   = str(row.get("Actual_Low", "")).strip()
         actual_close_str = str(row.get("Actual_Close", "")).strip()
@@ -1393,14 +1377,14 @@ def repair_entry_error_ema(dry_run: bool = False) -> dict:
                 al = _to_float(actual_low_str)
                 ac = _to_float(actual_close_str)
                 if al > 0 and ac > 0:
-                    gap = max(ac - al, ac * 0.005)  # minimal 0.5% dari close
+                    gap = max(ac - al, ac * 0.005)
             except Exception:
                 pass
         elif actual_close_str:
             try:
                 ac = _to_float(actual_close_str)
                 if ac > 0:
-                    gap = ac * 0.01  # 1% proxy
+                    gap = ac * 0.01
             except Exception:
                 pass
 
@@ -1414,11 +1398,8 @@ def repair_entry_error_ema(dry_run: bool = False) -> dict:
         result["would_update"] = {t: len(gs) for t, gs in ticker_gaps.items()}
         return result
 
-    # Terapkan update ke v12_memory
-    try:
-        store = st.session_state.v12_memory
-    except Exception:
-        store = {}
+    # ═══ PERBAIKAN: AMBIL DATA DARI DATABASE (JANGAN DARI SESSION STATE) ═══
+    store = load_v12_memory()
 
     for ticker, gaps in ticker_gaps.items():
         mem = store.get(ticker, {})
