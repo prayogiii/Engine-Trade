@@ -1338,7 +1338,113 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing",
             else:
                 st.error(f"Gagal integrasi V12: {e}")
         except Exception:
-            print(f"[sheets] integrate_actual_to_v12 error (silent): {e}")# ═══════════════════════════════════════════════════════════════
+            print(f"[sheets] integrate_actual_to_v12 error (silent): {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# REPAIR: Backfill entry_error_ema dari data NT yang sudah ada
+# ═══════════════════════════════════════════════════════════════
+def repair_entry_error_ema(dry_run: bool = False) -> dict:
+    """
+    Scan SEMUA baris riwayat_actual (termasuk V12_Consumed=Yes) yang
+    Outcome=Not Touched atau Entry_Miss=Yes, lalu update entry_error_ema
+    di v12_memory untuk setiap ticker yang terdampak.
+
+    Diperlukan untuk backfill data lama yang tidak ter-update akibat bug
+    'if not last_pred: return' di integrate_actual_to_v12 versi lama.
+
+    Aman dijalankan berkali-kali (EMA, bukan additive), tapi idealnya
+    cukup sekali setelah deploy fix.
+
+    Returns:
+        dict: {processed, updated_tickers, skipped, dry_run}
+    """
+    result = {"processed": 0, "updated_tickers": {}, "skipped": [], "dry_run": dry_run}
+
+    try:
+        sheet = get_gsheet().worksheet("riwayat_actual")
+        records = sheet.get_all_records()
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+    # Kumpulkan update per ticker (hindari multiple write)
+    ticker_gaps: dict[str, list[float]] = {}
+
+    for row in records:
+        outcome_raw = str(row.get("Outcome", "")).strip().upper()
+        entry_miss   = str(row.get("Entry_Miss", "")).strip()
+        is_nt = outcome_raw in ("NOT TOUCHED", "NOT_TOUCHED") or entry_miss == "Yes"
+        if not is_nt:
+            continue
+
+        saham = str(row.get("Saham", "")).replace(".JK", "").strip().upper()
+        if not saham:
+            result["skipped"].append("baris tanpa saham")
+            continue
+
+        # Hitung gap dari actual data
+        gap = None
+        actual_low_str   = str(row.get("Actual_Low", "")).strip()
+        actual_close_str = str(row.get("Actual_Close", "")).strip()
+
+        if actual_low_str and actual_close_str:
+            try:
+                al = _to_float(actual_low_str)
+                ac = _to_float(actual_close_str)
+                if al > 0 and ac > 0:
+                    gap = max(ac - al, ac * 0.005)  # minimal 0.5% dari close
+            except Exception:
+                pass
+        elif actual_close_str:
+            try:
+                ac = _to_float(actual_close_str)
+                if ac > 0:
+                    gap = ac * 0.01  # 1% proxy
+            except Exception:
+                pass
+
+        if gap and gap > 0:
+            ticker_gaps.setdefault(saham, []).append(gap)
+            result["processed"] += 1
+        else:
+            result["skipped"].append(f"{saham}: tidak bisa hitung gap")
+
+    if dry_run:
+        result["would_update"] = {t: len(gs) for t, gs in ticker_gaps.items()}
+        return result
+
+    # Terapkan update ke v12_memory
+    try:
+        store = st.session_state.v12_memory
+    except Exception:
+        store = {}
+
+    for ticker, gaps in ticker_gaps.items():
+        mem = store.get(ticker, {})
+        old_err = mem.get("entry_error_ema", 0.0)
+        new_err = old_err
+        for g in gaps:
+            new_err = compute_entry_error_update(new_err, g)
+        mem["entry_error_ema"] = new_err
+        store[ticker] = mem
+        result["updated_tickers"][ticker] = {
+            "gap_count": len(gaps),
+            "old_ema": round(old_err, 4),
+            "new_ema": round(new_err, 4),
+        }
+
+    if store:
+        try:
+            save_v12_memory(store)
+            try:
+                st.session_state.v12_memory = store
+            except Exception:
+                pass
+        except Exception as e:
+            result["save_error"] = str(e)
+
+    return result
 # BANDARMOLOGY DATA LOADER
 # ═══════════════════════════════════════════════════════════════
 def load_bandarmology_data(ticker):
