@@ -348,46 +348,6 @@ def render_dashboard_page():
                 "💡 Belum cukup data. Butuh minimal 3 evaluasi per kombinasi "
                 "regime × signal type untuk ditampilkan di tabel di atas."
             )
-
-        # ── Repair Tool: Backfill entry_error_ema dari NT lama ──
-        st.markdown("---")
-        st.markdown("**🔧 Repair: Backfill Entry Error EMA**")
-        st.caption(
-            "Jika ada data **Not Touched** lama yang sudah `V12_Consumed=Yes` tapi "
-            "`entry_error_ema` masih 0, jalankan repair ini sekali untuk memproses ulang semua data NT."
-        )
-        from services.sheets_client import repair_entry_error_ema
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            if st.button("🔍 Preview (Dry Run)", key="btn_repair_dry", use_container_width=True,
-                         help="Lihat berapa NT yang akan diproses tanpa commit ke memory"):
-                with st.spinner("Scanning riwayat_actual..."):
-                    preview = repair_entry_error_ema(dry_run=True)
-                nt_total = preview.get("processed", 0)
-                would = preview.get("would_update", {})
-                if nt_total > 0:
-                    st.success(f"✅ Ditemukan **{nt_total} Not Touched** dari **{len(would)} ticker**: {', '.join(would.keys())}")
-                else:
-                    st.info("Tidak ada data NT yang perlu direpair.")
-                if preview.get("skipped"):
-                    st.caption(f"Skip: {len(preview['skipped'])} baris (tidak ada data harga)")
-        with rc2:
-            if st.button("⚡ Jalankan Repair", key="btn_repair_run", use_container_width=True,
-                         help="Backfill entry_error_ema dari semua Not Touched di riwayat_actual"):
-                with st.spinner("Memproses data Not Touched lama..."):
-                    res = repair_entry_error_ema(dry_run=False)
-                if res.get("error"):
-                    st.error(f"Error: {res['error']}")
-                elif res["updated_tickers"]:
-                    st.success(f"✅ Berhasil update **{len(res['updated_tickers'])} ticker**!")
-                    for tk, info in res["updated_tickers"].items():
-                        st.caption(
-                            f"**{tk}**: {info['gap_count']} NT events → "
-                            f"entry_error_ema {info['old_ema']:.1f} → **{info['new_ema']:.1f}**"
-                        )
-                    st.rerun()
-                else:
-                    st.info("Tidak ada data NT yang perlu direpair.")
     st.markdown('<div style="height: 32px;"></div>', unsafe_allow_html=True)
     st.markdown("""
     <div style="margin: 0 0 16px 0;">
