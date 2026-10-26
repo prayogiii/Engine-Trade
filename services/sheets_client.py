@@ -1152,17 +1152,21 @@ def update_v12_memory(ticker, factor_signals, actual_return, volatility=0.02,
                       memory_store=None, skip_save=False):
     """
     Wrapper — delegasi math ke core.scoring, persist ke Sheets.
-
-    memory_store: dict opsional (cron context — bypass session_state).
-                  None → pakai st.session_state.v12_memory (UI context).
-    skip_save:    kalau True, caller bertanggung jawab save batch di akhir
-                  (untuk cron loop — hindari N kali write ke Sheets).
     """
     store = memory_store if memory_store is not None else st.session_state.v12_memory
     if ticker not in store:
         store[ticker] = {"weights": {}, "accuracy": {}, "error_ema": {}}
     mem = store[ticker]
+    
+    # ═══ SAFETY NET: Simpan nilai entry_error_ema sebelum dihitung ulang ═══
+    _saved_entry_error = mem.get("entry_error_ema")
+    
     new_mem = compute_memory_update_math(mem, factor_signals, actual_return, volatility)
+    
+    # ═══ SAFETY NET: Kembalikan entry_error_ema (jika sebelumnya ada) ═══
+    if _saved_entry_error is not None:
+        new_mem["entry_error_ema"] = _saved_entry_error
+        
     store[ticker] = new_mem
     if not skip_save:
         save_v12_memory(store)
@@ -1334,92 +1338,6 @@ def integrate_actual_to_v12(waktu, saham, actual_data, mode="swing",
         except Exception:
             print(f"[sheets] integrate_actual_to_v12 error (silent): {e}")
 
-
-# ═══════════════════════════════════════════════════════════════
-# REPAIR: Backfill entry_error_ema dari data NT yang sudah ada
-# ═══════════════════════════════════════════════════════════════
-def repair_entry_error_ema(dry_run: bool = False) -> dict:
-    result = {"processed": 0, "updated_tickers": {}, "skipped": [], "dry_run": dry_run}
-
-    try:
-        sheet = get_gsheet().worksheet("riwayat_actual")
-        records = sheet.get_all_records()
-    except Exception as e:
-        result["error"] = str(e)
-        return result
-
-    ticker_gaps: dict[str, list[float]] = {}
-
-    for row in records:
-        outcome_raw = str(row.get("Outcome", "")).strip().upper()
-        entry_miss   = str(row.get("Entry_Miss", "")).strip()
-        is_nt = outcome_raw in ("NOT TOUCHED", "NOT_TOUCHED") or entry_miss == "Yes"
-        if not is_nt:
-            continue
-
-        saham = str(row.get("Saham", "")).replace(".JK", "").strip().upper()
-        if not saham:
-            result["skipped"].append("baris tanpa saham")
-            continue
-
-        gap = None
-        actual_low_str   = str(row.get("Actual_Low", "")).strip()
-        actual_close_str = str(row.get("Actual_Close", "")).strip()
-
-        if actual_low_str and actual_close_str:
-            try:
-                al = _to_float(actual_low_str)
-                ac = _to_float(actual_close_str)
-                if al > 0 and ac > 0:
-                    gap = max(ac - al, ac * 0.005)
-            except Exception:
-                pass
-        elif actual_close_str:
-            try:
-                ac = _to_float(actual_close_str)
-                if ac > 0:
-                    gap = ac * 0.01
-            except Exception:
-                pass
-
-        if gap and gap > 0:
-            ticker_gaps.setdefault(saham, []).append(gap)
-            result["processed"] += 1
-        else:
-            result["skipped"].append(f"{saham}: tidak bisa hitung gap")
-
-    if dry_run:
-        result["would_update"] = {t: len(gs) for t, gs in ticker_gaps.items()}
-        return result
-
-    # ═══ PERBAIKAN: AMBIL DATA DARI DATABASE (JANGAN DARI SESSION STATE) ═══
-    store = load_v12_memory()
-
-    for ticker, gaps in ticker_gaps.items():
-        mem = store.get(ticker, {})
-        old_err = mem.get("entry_error_ema", 0.0)
-        new_err = old_err
-        for g in gaps:
-            new_err = compute_entry_error_update(new_err, g)
-        mem["entry_error_ema"] = new_err
-        store[ticker] = mem
-        result["updated_tickers"][ticker] = {
-            "gap_count": len(gaps),
-            "old_ema": round(old_err, 4),
-            "new_ema": round(new_err, 4),
-        }
-
-    if store:
-        try:
-            save_v12_memory(store)
-            try:
-                st.session_state.v12_memory = store
-            except Exception:
-                pass
-        except Exception as e:
-            result["save_error"] = str(e)
-
-    return result
 # BANDARMOLOGY DATA LOADER
 # ═══════════════════════════════════════════════════════════════
 def load_bandarmology_data(ticker):
