@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-import pytz
+
 import streamlit as st
-from datetime import datetime
+import pytz
+
 
 from services.analyze_stock import analyze_stock
 from services.gemini_client import evaluasi_mode_dengan_ai
 from services.sheets_client import save_v12_prediction, save_signal_outcome, simpan_riwayat
 from ui.pages.analysis_display import display_analysis_result
-
+from datetime import datetime
 
 def render_analysis_flow_page(
     run_btn, ticker_input, ticker_raw, harga_manual, harga_terakhir_manual,
