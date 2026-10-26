@@ -751,7 +751,10 @@ def display_analysis_result(res):
         st.caption(
             "**Accuracy** = seberapa sering sinyal faktor sesuai arah harga. **Error EMA** = rata‑rata kesalahan prediksi (makin kecil makin baik)."
         )
-        mem = st.session_state.v12_memory.get(ticker_raw, {})
+        # ═══ PERBAIKAN: Bersihkan ticker dari .JK agar cocok dengan database ═══
+        _ticker_clean = str(ticker_raw).replace('.JK', '').strip().upper()
+        mem = st.session_state.v12_memory.get(_ticker_clean, {})
+        
         if mem:
             keys_to_show = [k for k in FACTOR_KEYS if not (is_daytrade and k == "Coppock")]
             acc_data = {k: mem.get('accuracy', {}).get(k, 0.5) for k in keys_to_show}
@@ -778,7 +781,7 @@ def display_analysis_result(res):
             for _k, _val in st.session_state.get('riwayat_actual', {}).items():
                 if isinstance(_k, tuple) and len(_k) >= 2:
                     _saham_k = str(_k[1]).replace('.JK', '').strip().upper()
-                    if _saham_k == ticker_raw.upper():
+                    if _saham_k == _ticker_clean: # <--- SUDAH DIPERBAIKI
                         _out = str(_val.get('Outcome', '')).strip()
                         _em  = str(_val.get('Entry_Miss', '')).strip()
                         if _out.upper() in ('NOT TOUCHED', 'NOT_TOUCHED') or _em == 'Yes':
@@ -793,7 +796,7 @@ def display_analysis_result(res):
             elif nt_ticker > 0:
                 st.warning(
                     f"🎯 **Error entry masih 0** padahal ada **{nt_ticker} data Not Touched** "
-                    f"untuk {ticker_raw} di database. "
+                    f"untuk {_ticker_clean} di database. "
                     "Kemungkinan prediksi V12 belum tersimpan saat outcome dicatat — "
                     "lakukan analisis ulang untuk memproses data ini."
                 )
