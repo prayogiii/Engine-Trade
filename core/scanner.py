@@ -14,7 +14,7 @@ from core.indicators import (
 from core.entry_exit import compute_entry_zone_and_sl_tp
 
 
-def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
+def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None, max_price=10000):
     """Menghitung skor teknikal + metrik lengkap untuk scanner V12."""
     try:
         closes = df_stock['Close'].values
@@ -24,7 +24,8 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
         last_price = float(closes[-1])
         if last_price <= 0:
             return None
-
+        if last_price > max_price:
+            return None
         ihsg_closes = ihsg_data['Close'].values
         if len(closes) < 65 or len(ihsg_closes) < 65:
             return None
@@ -145,7 +146,7 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
 
         # Breakout bonus — harus close BENAR-BENAR di atas high20 + volume kuat
         res20 = np.max(highs[-21:-1]) if len(highs) >= 21 else np.max(highs)
-        breakout_bonus = 0.10 if (last_price > res20 and vol_surge > 0.5) else 0.0
+        breakout_bonus = 0.10 if (last_price > res20 and vol_surge > 0.8) else 0.0
 
         # Tech Score V14 — Dual Adaptive Scoring (Leader vs Rebound)
         beta_effective = max(0.0, beta_norm) if rs_norm > 0 else beta_norm
@@ -175,7 +176,7 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
             score_rebound = -1.0
 
         # Hierarki Penentuan Tipe Setup & Scoring (Mutually Exclusive):
-        is_strong_leader = (rs_norm >= 0.25 or rs_blend >= 0.015) and (rsi_val >= 46.0 or last_price > sma20)
+        is_strong_leader = (rs_norm >= 0.50 or rs_blend >= 0.030) and (rsi_val >= 46.0 or (last_price > sma20 and vol_surge > 0))
 
         if is_strong_leader:
             tech_score = score_leader
@@ -201,12 +202,12 @@ def score_stock_tech(df_stock, ticker, ihsg_data, v12_mem=None):
         risk_on_pre = _ema20_ihsg > _sma20_ihsg and i_ret5 > 0
 
         if risk_on_pre:
-            th_strong, th_buy, th_weak = 0.40, 0.15, 0.05
+            th_strong, th_buy, th_weak = 0.50, 0.30, 0.15
         else:
             if setup_type == "🎯 Oversold Rebound":
-                th_strong, th_buy, th_weak = 0.45, 0.18, 0.08
+                th_strong, th_buy, th_weak = 0.55, 0.35, 0.15
             else:
-                th_strong, th_buy, th_weak = 0.50, 0.25, 0.10
+                th_strong, th_buy, th_weak = 0.60, 0.40, 0.20
 
         if tech_score > th_strong:    signal = "STRONG BUY ▲▲"
         elif tech_score > th_buy:     signal = "BUY ▲"
