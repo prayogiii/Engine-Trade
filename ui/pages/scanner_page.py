@@ -17,21 +17,22 @@ from core.riwayat import dapatkan_dict_swing_aktif
 # ═══════════════════════════════════════════════════════════════
 # PUBLIC API
 # ═══════════════════════════════════════════════════════════════
-def render_scanner_page(scan_btn: bool, mode_scan: str, likuiditas_min: int, ai_rerank: bool):
+def render_scanner_page(scan_btn: bool, mode_scan: str, likuiditas_min: int, ai_rerank: bool, max_price=10000):
     """Render scanner — execute scan + render hasil."""
     if scan_btn:
         _execute_scan(mode_scan, likuiditas_min)
 
     if st.session_state.get('scan_results'):
-        _render_scan_results(mode_scan, likuiditas_min, ai_rerank)
+        _render_scan_results(mode_scan, likuiditas_min, ai_rerank, max_price)
 
 
 # ═══════════════════════════════════════════════════════════════
 # EXECUTE SCAN
 # ═══════════════════════════════════════════════════════════════
-def _execute_scan(mode_scan: str, likuiditas_min: int):
+def _execute_scan(mode_scan: str, likuiditas_min: int, max_price: int):
     st.title("🔍 Scanner Saham IDX (V12 Tech Score)")
-    st.write(f"Mode: {mode_scan} | Likuiditas Min: Rp {likuiditas_min:,.0f}/hari")
+    _max_p = st.session_state.get('_sb_max_price', 10000)
+    st.write(f"Mode: {mode_scan} | Likuiditas Min: Rp {likuiditas_min:,.0f}/hari | Maks Harga: Rp {max_price:,.0f}")
 
     with st.spinner("📡 Mengambil daftar saham..."):
         daftar_saham = get_daftar_saham(mode_scan)
@@ -65,7 +66,7 @@ def _execute_scan(mode_scan: str, likuiditas_min: int):
                 last_price = float(df['Close'].iloc[-1])
                 if avg_vol * last_price < likuiditas_min:
                     return None
-            return score_stock_tech(df, ticker, ihsg_data)
+            return score_stock_tech(df, ticker, ihsg_data, max_price=max_price)
         except Exception:
             return None
 
