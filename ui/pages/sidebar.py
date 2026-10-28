@@ -448,9 +448,18 @@ def render_sidebar():
         )
         likuiditas_min = st.number_input(
             "Likuiditas Min (Rp/hari)",
-            min_value=0, value=300_000_000, step=100_000_000,
+            min_value=0, value=5_000_000_000, step=100_000_000,
             key="likuiditas_min",
             help="Rata-rata nilai transaksi 20 hari"
+        )
+        max_price = st.number_input(
+            "Maksimal Harga Saham (Rp)",
+            min_value=1000, 
+            max_value=50000, 
+            value=10000, 
+            step=500,
+            key="max_price",
+            help="Filter agar tidak masuk ke saham big cap yang butuh modal besar"
         )
         hide_active_swings = st.checkbox(
             "🚫 Sembunyikan emiten dengan Swing Aktif",
@@ -472,6 +481,7 @@ def render_sidebar():
         ):
             st.session_state['_sb_mode_scan'] = mode_scan
             st.session_state['_sb_likuiditas_min'] = likuiditas_min
+            st.session_state['_sb_max_price'] = max_price
             st.session_state['_sb_hide_active_swings'] = hide_active_swings
             st.session_state['_sb_ai_rerank'] = ai_rerank
             st.session_state['_sb_scan_btn'] = True
