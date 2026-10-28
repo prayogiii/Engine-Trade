@@ -20,7 +20,7 @@ from core.riwayat import dapatkan_dict_swing_aktif
 def render_scanner_page(scan_btn: bool, mode_scan: str, likuiditas_min: int, ai_rerank: bool, max_price=10000):
     """Render scanner — execute scan + render hasil."""
     if scan_btn:
-        _execute_scan(mode_scan, likuiditas_min)
+        _execute_scan(mode_scan, likuiditas_min, max_price)
 
     if st.session_state.get('scan_results'):
         _render_scan_results(mode_scan, likuiditas_min, ai_rerank, max_price)
