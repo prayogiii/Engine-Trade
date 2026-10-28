@@ -175,7 +175,7 @@ render_analysis_flow_page(
 )
 
 # 2. Scanner saham IDX
-render_scanner_page(scan_btn, mode_scan, likuiditas_min, ai_rerank)
+render_scanner_page(scan_btn, mode_scan, likuiditas_min, ai_rerank, max_price)
 
 # 3. Dashboard (kalau tidak ada hasil scan aktif)
 if not st.session_state.get('scan_results'):
