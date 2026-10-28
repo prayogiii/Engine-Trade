@@ -139,7 +139,7 @@ def _execute_scan(mode_scan: str, likuiditas_min: int, max_price: int):
 # ═══════════════════════════════════════════════════════════════
 # RENDER RESULTS
 # ═══════════════════════════════════════════════════════════════
-def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool):
+def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool, max_price: int):
     sr = st.session_state.scan_results
     buy_signals = sr['buy_signals']
     sell_signals = sr['sell_signals']
