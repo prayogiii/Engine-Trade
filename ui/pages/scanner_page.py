@@ -158,7 +158,7 @@ def _render_scan_results(mode_scan: str, likuiditas_min: int, ai_rerank: bool, m
         top_buys = [r for r in top_buys if r['ticker'].replace(".JK", "").strip().upper() not in dict_active_swings]
 
     st.title("🔍 Scanner Saham IDX (V12 Tech Score)")
-    st.write(f"Mode: {mode_scan} | Likuiditas Min: Rp {likuiditas_min:,.0f}/hari")
+    st.write(f"Mode: {mode_scan} | Likuiditas Min: Rp {likuiditas_min:,.0f}/hari | Maks Harga: Rp {max_price:,.0f}")
     st.markdown(f"✅ **Berhasil scan:** {hasil_scan_count}/{daftar_saham_count} saham")
     st.markdown(f"📈 Kandidat Beli: {len(buy_signals)} | 📉 Kandidat Jual: {len(sell_signals)}")
 
