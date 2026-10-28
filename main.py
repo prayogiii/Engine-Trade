@@ -155,7 +155,8 @@ scan_btn = st.session_state.pop('_sb_scan_btn', False)
 ai_riwayat_btn = st.session_state.pop('_sb_ai_riwayat_btn', False)
 
 mode_scan = st.session_state.get('_sb_mode_scan', 'Cepat (LQ45)')
-likuiditas_min = st.session_state.get('_sb_likuiditas_min', 300_000_000)
+likuiditas_min = st.session_state.get('_sb_likuiditas_min', 5_000_000_000)
+max_price = st.session_state.get('_sb_max_price', 10000)
 hide_active_swings = st.session_state.get('_sb_hide_active_swings', False)
 ai_rerank = st.session_state.get('_sb_ai_rerank', False)
 
