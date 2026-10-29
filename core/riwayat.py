@@ -28,10 +28,26 @@ MIN_VALID_DATE = "2026-08-18"
 
 
 def _is_misaligned(waktu: str) -> bool:
-    """True jika baris ini masuk kategori misaligned (legacy)."""
+    """True jika baris ini masuk kategori misaligned (legacy < 18 Agustus 2026)."""
     if not waktu:
         return False
-    return str(waktu) < MIN_VALID_DATE
+    w_str = str(waktu).strip()
+    try:
+        part = w_str.split()[0]
+        if "-" in part:
+            return part < MIN_VALID_DATE
+        elif "/" in part:
+            p = part.split("/")
+            if len(p) == 3:
+                if len(p[2]) == 4:
+                    iso = f"{p[2]}-{p[1].zfill(2)}-{p[0].zfill(2)}"
+                    return iso < MIN_VALID_DATE
+                elif len(p[0]) == 4:
+                    iso = f"{p[0]}-{p[1].zfill(2)}-{p[2].zfill(2)}"
+                    return iso < MIN_VALID_DATE
+    except Exception:
+        pass
+    return w_str < MIN_VALID_DATE
 
 
 # ═══════════════════════════════════════════════════════════════
