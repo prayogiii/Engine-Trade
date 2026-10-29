@@ -236,10 +236,10 @@ def render_dashboard_page():
 
         with st.expander("🔍 Detail & Verifikasi Data Outcome Terakhir", expanded=False):
             actual_dict = st.session_state.get('riwayat_actual', {})
-            st.caption(f"Total entri riwayat_actual di memori: **{len(actual_dict)}** entri.")
+            st.caption(f"Total entri riwayat_actual di memori: **{len(actual_dict)}** entri (diurutkan dari waktu terbaru).")
             seen_diag = set()
             sample_list = []
-            for k, v in list(actual_dict.items())[::-1]:
+            for k, v in actual_dict.items():
                 if not isinstance(v, dict):
                     continue
                 vid = id(v)
@@ -258,10 +258,9 @@ def render_dashboard_page():
                     "Actual Low": v.get("Actual_Low", "-"),
                     "Actual Close": v.get("Actual_Close", "-"),
                 })
-                if len(sample_list) >= 8:
-                    break
+            sample_list.sort(key=lambda x: str(x.get("Waktu", "")), reverse=True)
             if sample_list:
-                st.dataframe(pd.DataFrame(sample_list), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(sample_list[:10]), hide_index=True, use_container_width=True)
             else:
                 st.info("Belum ada data evaluasi.")
     else:
