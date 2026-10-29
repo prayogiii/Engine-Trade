@@ -780,7 +780,8 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
             sheet.update(f"I{row_index}", [["Yes"]], value_input_option="RAW")
         else:
             sheet.update("I2", [["Yes"]], value_input_option="RAW")
-            
+        if hasattr(st, "runtime") and st.runtime.exists():
+            st.session_state["_force_main_rerun"] = True
     except Exception as e:
         st.error(f"Gagal menyimpan actual: {e}")
 
