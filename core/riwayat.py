@@ -84,8 +84,12 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if waktu and _is_misaligned(waktu) and not has_actual_eval:
             continue
 
-        # ── Skip AVOID (bukan NT asli) ──
-        if val.get("_is_avoid"):
+        raw_outcome = str(val.get("Outcome", "") or "").strip().upper()
+        raw_gaya = str(val.get("Mode", "") or "").strip().upper()
+        entry_miss = str(val.get("Entry_Miss", "") or "").strip().upper() in ("YES", "TRUE", "1")
+
+        # ── Skip AVOID HANYA jika bukan hasil Win/Loss nyata ──
+        if val.get("_is_avoid") and raw_outcome not in ("WIN", "TARGET", "TP", "CUAN", "PROFIT", "LOSS", "CUT", "SL", "STOPLOSS", "RUGI"):
             continue
 
         # ── Dedup by id(val) — handle duplikasi key (SW / swing) ──
@@ -93,10 +97,6 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if vid in seen_ids:
             continue
         seen_ids.add(vid)
-
-        raw_outcome = str(val.get("Outcome", "") or "").strip().upper()
-        raw_gaya = str(val.get("Mode", "") or "").strip().upper()
-        entry_miss = str(val.get("Entry_Miss", "") or "").strip().upper() in ("YES", "TRUE", "1")
 
         # Normalisasi mode: SW vs DT
         is_sw = raw_gaya in ("SW", "SWING")
@@ -174,8 +174,10 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
         if waktu and _is_misaligned(waktu):
             continue
 
-        # ── Skip AVOID ──
-        if val.get("_is_avoid"):
+        raw_out = str(val.get("Outcome", "") or "").strip().upper()
+
+        # ── Skip AVOID HANYA jika bukan Win/Loss nyata ──
+        if val.get("_is_avoid") and raw_out not in ("WIN", "TARGET", "TP", "CUAN", "PROFIT", "LOSS", "CUT", "SL", "STOPLOSS", "RUGI"):
             continue
 
         # ── Filter ticker ──
@@ -194,12 +196,12 @@ def hitung_winrate_ticker_actual(ticker_raw, riwayat_actual):
             continue
         seen_ids.add(obj_id)
 
-        outcome = val.get("Outcome", "")
-        if outcome == "Win":
+        entry_miss = str(val.get("Entry_Miss", "") or "").strip().upper() in ("YES", "TRUE", "1")
+        if raw_out in ("WIN", "TARGET", "TP", "CUAN", "PROFIT"):
             win += 1
-        elif outcome == "Loss":
+        elif raw_out in ("LOSS", "CUT", "SL", "STOPLOSS", "STOP_LOSS", "RUGI"):
             loss += 1
-        elif outcome in ("Not Touched", "Suspended") or val.get("Entry_Miss") == "Yes":
+        elif raw_out in ("NOT TOUCHED", "NOT_TOUCHED", "SUSPENDED", "MISS", "ENTRY MISSED", "BE", "BREAKEVEN") or entry_miss:
             not_touched += 1
 
     total = win + loss
@@ -249,8 +251,9 @@ def diagnose_winrate_trend(riwayat_data, riwayat_actual):
         if not actual:
             continue
 
-        # ── Skip AVOID ──
-        if actual.get("_is_avoid"):
+        raw_out = str(actual.get("Outcome", "") or "").strip().upper()
+        # ── Skip AVOID HANYA jika bukan Win/Loss nyata ──
+        if actual.get("_is_avoid") and raw_out not in ("WIN", "TARGET", "TP", "CUAN", "PROFIT", "LOSS", "CUT", "SL", "STOPLOSS", "RUGI"):
             continue
 
         dedup_key = (waktu, saham, gaya)
@@ -258,23 +261,28 @@ def diagnose_winrate_trend(riwayat_data, riwayat_actual):
             continue
         seen_keys.add(dedup_key)
 
-        outcome = actual.get("Outcome", "")
-        entry_miss = actual.get("Entry_Miss") == "Yes"
+        entry_miss = str(actual.get("Entry_Miss", "") or "").strip().upper() in ("YES", "TRUE", "1")
 
         try:
             bulan = waktu[:7]
         except Exception:
             bulan = "unknown"
 
+        if raw_out in ("WIN", "TARGET", "TP", "CUAN", "PROFIT"):
+            fin_outcome = "Win"
+        elif raw_out in ("LOSS", "CUT", "SL", "STOPLOSS", "STOP_LOSS", "RUGI"):
+            fin_outcome = "Loss"
+        elif raw_out in ("NOT TOUCHED", "NOT_TOUCHED", "SUSPENDED", "MISS", "ENTRY MISSED", "BE", "BREAKEVEN") or entry_miss:
+            fin_outcome = "NT"
+        else:
+            fin_outcome = "kosong"
+
         records.append({
             "bulan": bulan,
             "gaya": gaya,
             "regime": regime,
             "saham": saham,
-            "outcome": (
-                "NT" if (entry_miss or outcome in ("Not Touched", "Suspended"))
-                else (outcome if outcome in ("Win", "Loss") else "kosong")
-            ),
+            "outcome": fin_outcome,
         })
 
     per_bulan = defaultdict(lambda: {"win": 0, "loss": 0, "nt": 0})
