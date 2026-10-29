@@ -73,13 +73,15 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
         if not isinstance(val, dict):
             continue
 
-        # ── Skip data misaligned (<18 Agustus) ──
+        # ── Skip data misaligned (<18 Agustus legacy) HANYA jika bukan data evaluasi yang terisi ──
         waktu = ""
         if isinstance(key, tuple) and len(key) >= 1:
             waktu = str(key[0])
         elif isinstance(val, dict):
             waktu = str(val.get("Waktu", ""))
-        if waktu and _is_misaligned(waktu):
+
+        has_actual_eval = bool(val.get("Actual_High") or val.get("Actual_Low") or val.get("Actual_Close"))
+        if waktu and _is_misaligned(waktu) and not has_actual_eval:
             continue
 
         # ── Skip AVOID (bukan NT asli) ──
@@ -417,6 +419,9 @@ def dapatkan_sinyal_perlu_dicatat(riwayat_data, riwayat_actual):
         if "AVOID" in _sinyal_upper:
             continue
         waktu_str = r.get("Waktu", "")
+        if not waktu_str or _is_misaligned(waktu_str):
+            continue  # Abaikan data lama/legacy (bulan 7 dsb)
+
         saham = r.get("Saham", "")
         gaya = r.get("Gaya", "SW")
         mode_actual = "swing" if gaya == "SW" else "daytrade"
@@ -436,6 +441,10 @@ def dapatkan_sinyal_perlu_dicatat(riwayat_data, riwayat_actual):
             dt_sinyal = today_date
 
         b_days = hitung_hari_bursa(dt_sinyal, today_date)
+
+        # Abaikan sinyal yang sudah lewat dari 30 hari bursa (sudah expired)
+        if b_days > 30:
+            continue
 
         item = {
             "record": r,
