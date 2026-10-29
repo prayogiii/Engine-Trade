@@ -766,8 +766,32 @@ def simpan_riwayat_actual(waktu, saham, actual_data, mode="swing",
         else:
             sheet.insert_row(new_row, index=2, value_input_option="RAW")
 
+        # Update in-memory session_state immediately (zero latency)
+        if "riwayat_actual" not in st.session_state or not isinstance(st.session_state.riwayat_actual, dict):
+            st.session_state.riwayat_actual = {}
+        
+        in_mem_val = {
+            "Actual_High": str(actual_data.get("Actual_High", "") or "").strip(),
+            "Actual_Low": str(actual_data.get("Actual_Low", "") or "").strip(),
+            "Actual_Close": str(actual_data.get("Actual_Close", "") or "").strip(),
+            "Outcome": str(actual_data.get("Outcome", "") or "").strip(),
+            "Entry_Miss": str(actual_data.get("Entry_Miss", "") or "").strip(),
+            "Mode": target_mode_norm,
+            "V12_Consumed": "Yes",
+            "_is_avoid": False,
+        }
+        w_str = str(waktu).strip()
+        s_clean = str(saham).replace(".JK", "").strip().upper()
+        mode_long = "swing" if target_mode_norm == "SW" else ("daytrade" if target_mode_norm == "DT" else mode)
+        for s_variant in set([s_clean, str(saham).strip().upper()]):
+            st.session_state.riwayat_actual[(w_str, s_variant, target_mode_norm)] = in_mem_val
+            st.session_state.riwayat_actual[(w_str, s_variant, mode_long)] = in_mem_val
+            st.session_state.riwayat_actual[(w_str, s_variant)] = in_mem_val
+
         try:
-            st.session_state.riwayat_actual = muat_riwayat_actual()
+            fresh_actual = muat_riwayat_actual()
+            if fresh_actual:
+                st.session_state.riwayat_actual = fresh_actual
         except Exception:
             pass
 
