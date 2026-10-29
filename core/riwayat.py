@@ -92,22 +92,31 @@ def hitung_statistik_riwayat_actual(riwayat_actual):
             continue
         seen_ids.add(vid)
 
-        outcome = val.get("Outcome", "")
-        gaya = str(val.get("Mode", "")).upper()
+        raw_outcome = str(val.get("Outcome", "") or "").strip().upper()
+        raw_gaya = str(val.get("Mode", "") or "").strip().upper()
+        entry_miss = str(val.get("Entry_Miss", "") or "").strip().upper() in ("YES", "TRUE", "1")
 
-        if outcome == "Win":
+        # Normalisasi mode: SW vs DT
+        is_sw = raw_gaya in ("SW", "SWING")
+        is_dt = raw_gaya in ("DT", "DAYTRADE", "DAY_TRADE", "DAY TRADE")
+
+        if raw_outcome in ("WIN", "TARGET", "TP", "CUAN", "PROFIT"):
             total_win += 1
-            if gaya == "SW":
+            if is_sw:
                 win_sw += 1
-            elif gaya == "DT":
+            elif is_dt:
                 win_dt += 1
-        elif outcome == "Loss":
+            else:
+                win_sw += 1  # default ke SW jika gaya tidak terdefinisi
+        elif raw_outcome in ("LOSS", "CUT", "SL", "STOPLOSS", "STOP_LOSS", "RUGI"):
             total_loss += 1
-            if gaya == "SW":
+            if is_sw:
                 loss_sw += 1
-            elif gaya == "DT":
+            elif is_dt:
                 loss_dt += 1
-        elif outcome in ("Not Touched", "Suspended") or val.get("Entry_Miss") == "Yes":
+            else:
+                loss_sw += 1
+        elif raw_outcome in ("NOT TOUCHED", "NOT_TOUCHED", "SUSPENDED", "MISS", "ENTRY MISSED", "BE", "BREAKEVEN") or entry_miss:
             total_not_touched += 1
 
     total_eval = total_win + total_loss
