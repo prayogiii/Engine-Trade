@@ -20,7 +20,12 @@ from config.brokers import get_broker_label
 from core.bandarmology import klasifikasi_broker
 from core.riwayat import hitung_statistik_riwayat_actual
 from services.yfinance_client import load_ihsg_data
-from services.sheets_client import get_broksum_cache, get_signal_outcomes_stats
+from services.sheets_client import (
+    get_broksum_cache,
+    get_signal_outcomes_stats,
+    muat_riwayat_actual,
+    muat_riwayat_dari_sheets,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -154,13 +159,31 @@ def render_dashboard_page():
 
     # PERFORMANCE METRICS
     st.markdown('<div style="height: 32px;"></div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div style="margin: 0 0 16px 0;">
-        <span style="color:#f3f4f6; font-size:20px; font-weight:700;">Performance Metrics</span>
-        <span style="color:#64748b; font-size:12px; margin-left:10px;">
-            — Live engine track record from evaluated signals</span>
-    </div>
-    """, unsafe_allow_html=True)
+    pm_col1, pm_col2 = st.columns([5, 1])
+    with pm_col1:
+        st.markdown("""
+        <div style="margin: 0 0 16px 0;">
+            <span style="color:#f3f4f6; font-size:20px; font-weight:700;">Performance Metrics</span>
+            <span style="color:#64748b; font-size:12px; margin-left:10px;">
+                — Live engine track record from evaluated signals</span>
+        </div>
+        """, unsafe_allow_html=True)
+    with pm_col2:
+        if st.button("🔄 Sync Data", key="sync_metrics_btn", help="Tarik riwayat & outcome terbaru langsung dari Google Sheets"):
+            with st.spinner("Sinkronisasi data Google Sheets..."):
+                try:
+                    fresh_actual = muat_riwayat_actual()
+                    if fresh_actual:
+                        st.session_state.riwayat_actual = fresh_actual
+                    fresh_riwayat = muat_riwayat_dari_sheets()
+                    if fresh_riwayat:
+                        st.session_state.riwayat = fresh_riwayat
+                    try:
+                        st.rerun(scope="app")
+                    except TypeError:
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Gagal sync: {e}")
 
     stats_actual = hitung_statistik_riwayat_actual(st.session_state.get('riwayat_actual', {}))
 
