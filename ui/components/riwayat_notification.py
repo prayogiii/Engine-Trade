@@ -131,7 +131,10 @@ def render_notifikasi_evaluasi_riwayat():
                                     on_update_callback=integrate_actual_to_v12,
                                 )
                                 st.success(f"✅ Outcome {saham_key} berhasil disimpan!")
-                                st.rerun()
+                                try:
+                                    st.rerun(scope="app")
+                                except TypeError:
+                                    st.rerun()
                     st.divider()
 
         with tab_active:
@@ -206,5 +209,8 @@ def render_notifikasi_evaluasi_riwayat():
                                     on_update_callback=integrate_actual_to_v12,
                                 )
                                 st.success(f"✅ Outcome {saham_key} berhasil disimpan!")
-                                st.rerun()
+                                try:
+                                    st.rerun(scope="app")
+                                except TypeError:
+                                    st.rerun()
                     st.divider()
