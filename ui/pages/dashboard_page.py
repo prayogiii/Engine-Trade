@@ -233,36 +233,6 @@ def render_dashboard_page():
         nt_color = "#ef4444" if nt > 25 else ("#f59e0b" if nt > 15 else "#10b981")
         with sc5:
             st.markdown(_stat_card("Not Touched", f"{nt:.1f}%", f"{stats_actual['total_not_touched']} entries missed", nt_color, "🚫"), unsafe_allow_html=True)
-
-        with st.expander("🔍 Detail & Verifikasi Data Outcome Terakhir", expanded=False):
-            actual_dict = st.session_state.get('riwayat_actual', {})
-            st.caption(f"Total entri riwayat_actual di memori: **{len(actual_dict)}** entri (diurutkan dari waktu terbaru).")
-            seen_diag = set()
-            sample_list = []
-            for k, v in actual_dict.items():
-                if not isinstance(v, dict):
-                    continue
-                vid = id(v)
-                if vid in seen_diag:
-                    continue
-                seen_diag.add(vid)
-                saham_val = k[1] if isinstance(k, tuple) and len(k) > 1 else str(v.get("Saham", "?"))
-                waktu_val = k[0] if isinstance(k, tuple) and len(k) > 0 else str(v.get("Waktu", "?"))
-                sample_list.append({
-                    "Saham": saham_val,
-                    "Waktu": waktu_val,
-                    "Mode": v.get("Mode", "-"),
-                    "Outcome": v.get("Outcome", "-"),
-                    "Entry_Miss": v.get("Entry_Miss", "No"),
-                    "Actual High": v.get("Actual_High", "-"),
-                    "Actual Low": v.get("Actual_Low", "-"),
-                    "Actual Close": v.get("Actual_Close", "-"),
-                })
-            sample_list.sort(key=lambda x: str(x.get("Waktu", "")), reverse=True)
-            if sample_list:
-                st.dataframe(pd.DataFrame(sample_list[:10]), hide_index=True, use_container_width=True)
-            else:
-                st.info("Belum ada data evaluasi.")
     else:
         st.markdown("""
         <div style="background:#1a1d24; border:1px dashed #334155;
