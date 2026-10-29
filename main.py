@@ -136,7 +136,11 @@ if _time.time() - _last_eval_ts > 3600:      # 1 jam
 # Body utama cuma rerun saat tombol (Analisis/Scan/AI) diklik.
 # ═══════════════════════════════════════════════════════════════
 render_sidebar()
-
+if st.session_state.pop("_force_main_rerun", False):
+    try:
+        st.rerun(scope="app")  
+    except TypeError:
+        st.rerun()
 
 # ═══════════════════════════════════════════════════════════════
 # BACA STATE DARI SIDEBAR
@@ -156,7 +160,7 @@ ai_riwayat_btn = st.session_state.pop('_sb_ai_riwayat_btn', False)
 
 mode_scan = st.session_state.get('_sb_mode_scan', 'Cepat (LQ45)')
 likuiditas_min = st.session_state.get('_sb_likuiditas_min', 5_000_000_000)
-max_price = st.session_state.get('_sb_max_price', 1000)
+max_price = st.session_state.get('_sb_max_price', 10000)
 hide_active_swings = st.session_state.get('_sb_hide_active_swings', False)
 ai_rerank = st.session_state.get('_sb_ai_rerank', False)
 
