@@ -1444,19 +1444,27 @@ def _parse_price_single(s: str) -> float | None:
         return None
 
 
-def determine_outcome_path(bars, entry_high, tp, sl, horizon):
-    filled = False
-    for b in bars.iloc[:horizon].itertuples():
-        just_filled = False
-        if not filled:
-            if b.Low > entry_high:
-                continue
-            filled = just_filled = True
-        if sl and b.Low <= sl:                  # SL dulu (konservatif)
-            return "Loss"
-        if tp and not just_filled and b.High >= tp:   # TP baru valid setelah entry
-            return "Win"
-    return "Open" if filled else "Not Touched"
+def _determine_outcome(
+    entry_low: float, entry_high: float,
+    tp_low: float | None, sl: float | None,
+    actual_high: float, actual_low: float, actual_close: float,
+    entry_miss: str,
+) -> str:
+    """
+    Tentukan outcome dari actual HL C vs Entry/TP/SL.
+    Prioritas: Suspended > Not Touched > SL (SL menang duluan) > TP > Close-vs-Entry.
+    """
+    if actual_high <= 0 or actual_low <= 0:
+        return "Suspended"
+    if entry_miss == "Yes":
+        return "Not Touched"
+    if sl is not None and sl > 0 and actual_low <= sl:
+        return "Loss"
+    if tp_low is not None and tp_low > 0 and actual_high >= tp_low:
+        return "Win"
+    entry_ref = entry_high if entry_high > 0 else entry_low
+    return "Win" if actual_close > entry_ref else "Loss"
+
 
 def _save_actual_to_sheets_cron(
     waktu: str, saham: str, mode: str,
