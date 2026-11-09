@@ -61,7 +61,9 @@ st.markdown("""
     [data-testid="stBottom"] {
         background-color: #0f1116 !important;
     }
-    [data-testid="stAppViewContainer"] * { color-scheme: dark; }
+    /* Jangan pakai color-scheme: dark pada * — ini bikin browser inject
+       background gelap sendiri ke semua form input (Base Web components).
+       Cukup di html/body saja. */
     .main { background-color: #0f1116; color: #ffffff; }
     div[data-testid="stMetricValue"] { font-size: 24px; font-weight: bold; color: #00ffcc; }
     div[data-testid="stMetricLabel"] { font-size: 14px; color: #8892b0; }
@@ -81,7 +83,7 @@ st.markdown("""
     .ai-insight-card h3 { color: #a78bfa; margin-top: 0; font-size: 20px; }
     .ai-insight-card p { margin-bottom: 10px; }
 
-    /* Fix column containers — Streamlit versi baru kadang inject background gelap */
+    /* ── Fix column containers — transparent ── */
     [data-testid="stColumn"],
     [data-testid="column"],
     .stColumn {
@@ -90,7 +92,7 @@ st.markdown("""
         box-shadow: none !important;
     }
 
-    /* Fix Plotly chart container agar background menyatu */
+    /* ── Fix Plotly chart container agar background menyatu ── */
     .stPlotlyChart {
         background: transparent !important;
         border-radius: 12px;
@@ -101,9 +103,65 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* Metric containers — fix bg gelap */
+    /* ── Metric containers — fix bg gelap ── */
     [data-testid="stMetric"],
     [data-testid="metric-container"] {
+        background: transparent !important;
+    }
+
+    /* ── Fix Base Web input / textarea background ──
+       Streamlit pakai Base Web. color-scheme:dark bikin browser
+       inject warna sendiri ke form elements. Override manual. */
+    [data-baseweb="base-input"],
+    [data-baseweb="input"],
+    [data-baseweb="textarea"] {
+        background-color: #1a2235 !important;
+        border-color: #2d3f5a !important;
+    }
+    [data-baseweb="base-input"] input,
+    [data-baseweb="base-input"] textarea,
+    input[class*="st-"],
+    textarea[class*="st-"] {
+        background-color: transparent !important;
+        color: #e2e8f0 !important;
+    }
+
+    /* ── Fix file uploader dropzone ── */
+    [data-testid="stFileUploaderDropzone"],
+    [data-testid="stFileUploader"] > section {
+        background-color: #1a2235 !important;
+        border-color: #2d3f5a !important;
+        border-style: dashed !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stFileUploaderDropzone"]:hover {
+        border-color: #00ffcc !important;
+        background-color: rgba(0,255,204,0.04) !important;
+    }
+
+    /* ── Fix selectbox / dropdown ── */
+    [data-baseweb="select"] > div:first-child {
+        background-color: #1a2235 !important;
+        border-color: #2d3f5a !important;
+    }
+
+    /* ── Fix number input ── */
+    [data-testid="stNumberInput"] [data-baseweb="input"] {
+        background-color: #1a2235 !important;
+    }
+
+    /* ── Fix checkbox area ── */
+    [data-testid="stCheckbox"] {
+        background: transparent !important;
+    }
+
+    /* ── Fix expander header / content ── */
+    [data-testid="stExpander"] details {
+        background: #131a28 !important;
+        border: 1px solid #1e293b !important;
+        border-radius: 10px !important;
+    }
+    [data-testid="stExpander"] summary {
         background: transparent !important;
     }
     </style>
