@@ -50,7 +50,6 @@ st.set_page_config(
 )
 
 st.markdown("""
-    <meta name="darkreader-lock">
     <style>
     html, body, [data-testid="stAppViewContainer"] { color-scheme: dark !important; }
     #MainMenu { visibility: hidden !important; }
