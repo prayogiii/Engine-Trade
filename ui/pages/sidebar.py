@@ -70,6 +70,7 @@ def render_sidebar():
     with st.sidebar:
         # SIDEBAR CUSTOM STYLING
         st.markdown("""
+            <meta name="darkreader-lock">
             <style>
             /* Sidebar container */
             section[data-testid="stSidebar"] {
@@ -257,14 +258,35 @@ def render_sidebar():
             /* ── Base Web input di sidebar ── */
             section[data-testid="stSidebar"] [data-baseweb="base-input"],
             section[data-testid="stSidebar"] [data-baseweb="input"],
-            section[data-testid="stSidebar"] [data-baseweb="textarea"] {
-                background-color: #192132 !important;
+            section[data-testid="stSidebar"] [data-baseweb="textarea"],
+            section[data-testid="stSidebar"] div[data-testid="stTextInput"] div[data-baseweb="input"],
+            section[data-testid="stSidebar"] div[data-testid="stTextInput"] div[data-baseweb="base-input"],
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="input"],
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="base-input"] {
+                background-color: #131a28 !important;
                 border-color: #2d3f5a !important;
+                border-radius: 8px !important;
             }
             section[data-testid="stSidebar"] [data-baseweb="base-input"] input,
-            section[data-testid="stSidebar"] [data-baseweb="base-input"] textarea {
-                color: #e2e8f0 !important;
-                background-color: transparent !important;
+            section[data-testid="stSidebar"] [data-baseweb="base-input"] textarea,
+            section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input,
+            section[data-testid="stSidebar"] input {
+                color: #f3f4f6 !important;
+                -webkit-text-fill-color: #f3f4f6 !important;
+                background-color: #131a28 !important;
+            }
+            section[data-testid="stSidebar"] input::placeholder,
+            section[data-testid="stSidebar"] textarea::placeholder {
+                color: #64748b !important;
+                -webkit-text-fill-color: #64748b !important;
+                opacity: 1 !important;
+            }
+            section[data-testid="stSidebar"] input:-webkit-autofill,
+            section[data-testid="stSidebar"] input:-webkit-autofill:hover,
+            section[data-testid="stSidebar"] input:-webkit-autofill:focus {
+                -webkit-box-shadow: 0 0 0 1000px #131a28 inset !important;
+                -webkit-text-fill-color: #f3f4f6 !important;
             }
 
             /* ── File uploader di sidebar ── */
