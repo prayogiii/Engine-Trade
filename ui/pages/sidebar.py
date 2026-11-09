@@ -244,6 +244,27 @@ def render_sidebar():
                 margin: 12px 0;
                 border-color: #1e293b;
             }
+
+            /* Fix column background — Streamlit versi baru kadang inject bg hitam */
+            section[data-testid="stSidebar"] [data-testid="stColumn"],
+            section[data-testid="stSidebar"] [data-testid="column"],
+            section[data-testid="stSidebar"] .stColumn {
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+            }
+            /* Fix input field bg agar tidak gelap double */
+            section[data-testid="stSidebar"] .stTextInput input,
+            section[data-testid="stSidebar"] .stNumberInput input {
+                background-color: #1e293b !important;
+                border-color: #334155 !important;
+                color: #e2e8f0 !important;
+            }
+            /* Fix selectbox */
+            section[data-testid="stSidebar"] .stSelectbox > div > div {
+                background-color: #1e293b !important;
+                border-color: #334155 !important;
+            }
             </style>
         """, unsafe_allow_html=True)
 
