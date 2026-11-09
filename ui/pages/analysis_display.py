@@ -182,7 +182,18 @@ def display_analysis_result(res):
                                  marker=dict(symbol='triangle-up', size=10, color='#10b981'), name='Buy Signal'))
         for lvl, lbl, clr in [(r1, 'R1', 'orange'), (s1, 'S1', 'red'), (pp, 'PP', 'gray')]:
             fig.add_hline(y=lvl, line_dash="dash", line_color=clr, annotation_text=lbl, annotation_position="right")
-        fig.update_layout(template="plotly_dark", height=450, margin=dict(l=10, r=10, t=20, b=10), dragmode='pan')
+        fig.update_layout(
+            template="plotly_dark",
+            height=450,
+            margin=dict(l=10, r=10, t=20, b=10),
+            dragmode='pan',
+            paper_bgcolor='#0f1116',
+            plot_bgcolor='#0f1116',
+            xaxis=dict(showgrid=False, zeroline=False, linecolor='rgba(128,128,128,0.2)'),
+            yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.1)', zeroline=False),
+            legend=dict(bgcolor='rgba(15,17,22,0.8)', bordercolor='rgba(255,255,255,0.1)', borderwidth=1),
+            hoverlabel=dict(bgcolor='#1e293b', font_size=11),
+        )
         st.plotly_chart(fig, use_container_width=True)
 
     # RINGKASAN EKSEKUTIF — REDESIGN v2 (Visual & Interaktif)
