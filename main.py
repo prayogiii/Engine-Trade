@@ -217,14 +217,29 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* ── Fix expander header / content ── */
+    /* ── Fix expander header / content — transparan menyatu dengan background ── */
+    [data-testid="stExpander"],
     [data-testid="stExpander"] details {
-        background: #131a28 !important;
+        background: transparent !important;
+        background-color: transparent !important;
         border: 1px solid #1e293b !important;
-        border-radius: 10px !important;
+        border-radius: 8px !important;
     }
     [data-testid="stExpander"] summary {
         background: transparent !important;
+        background-color: transparent !important;
+        color: #cbd5e1 !important;
+    }
+    [data-testid="stExpander"] summary:hover {
+        color: #00ffcc !important;
+    }
+    [data-testid="stExpander"] details[open] > summary {
+        border-bottom: 1px solid #1e293b !important;
+        background: transparent !important;
+    }
+    [data-testid="stExpander"] details > div {
+        background: transparent !important;
+        background-color: transparent !important;
     }
     </style>
 """, unsafe_allow_html=True)
