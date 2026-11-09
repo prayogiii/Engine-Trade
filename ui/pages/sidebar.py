@@ -209,25 +209,34 @@ def render_sidebar():
                 transform: translateY(-1px);
             }
 
-            /* Expander polish */
+            /* Expander polish — transparan menyatu dengan background */
+            section[data-testid="stSidebar"] [data-testid="stExpander"],
             section[data-testid="stSidebar"] details {
                 border: 1px solid #1e293b !important;
-                border-radius: 10px;
-                background: #0d1017;
+                border-radius: 8px !important;
+                background: transparent !important;
+                background-color: transparent !important;
                 overflow: hidden;
                 margin-top: 6px;
             }
             section[data-testid="stSidebar"] details > summary {
+                background: transparent !important;
+                background-color: transparent !important;
                 font-size: 12px;
                 font-weight: 600;
                 padding: 10px 12px;
                 color: #cbd5e1;
             }
+            section[data-testid="stSidebar"] details > summary:hover {
+                color: #00ffcc !important;
+            }
             section[data-testid="stSidebar"] details[open] > summary {
-                border-bottom: 1px solid #1e293b;
-                background: #131720;
+                border-bottom: 1px solid #1e293b !important;
+                background: transparent !important;
             }
             section[data-testid="stSidebar"] details > div {
+                background: transparent !important;
+                background-color: transparent !important;
                 padding: 12px;
             }
 
@@ -345,14 +354,6 @@ def render_sidebar():
             }
             section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"]:hover {
                 border-color: #00ffcc !important;
-            }
-
-            /* ── Expander content di sidebar ── */
-            section[data-testid="stSidebar"] [data-testid="stExpander"] details,
-            section[data-testid="stSidebar"] details {
-                background-color: #101827 !important;
-                border: 1px solid #1e293b !important;
-                border-radius: 10px !important;
             }
             </style>
         """, unsafe_allow_html=True)
