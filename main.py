@@ -50,6 +50,7 @@ st.set_page_config(
 )
 
 st.markdown("""
+    <meta name="darkreader-lock">
     <style>
     html, body, [data-testid="stAppViewContainer"] { color-scheme: dark !important; }
     #MainMenu { visibility: hidden !important; }
@@ -109,21 +110,39 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* ── Fix Base Web input / textarea background ──
-       Streamlit pakai Base Web. color-scheme:dark bikin browser
-       inject warna sendiri ke form elements. Override manual. */
+    /* ── Fix Base Web input / textarea background ── */
     [data-baseweb="base-input"],
     [data-baseweb="input"],
-    [data-baseweb="textarea"] {
-        background-color: #1a2235 !important;
+    [data-baseweb="textarea"],
+    div[data-testid="stTextInput"] div[data-baseweb="input"],
+    div[data-testid="stTextInput"] div[data-baseweb="base-input"],
+    div[data-testid="stNumberInput"] div[data-baseweb="input"],
+    div[data-testid="stNumberInput"] div[data-baseweb="base-input"] {
+        background-color: #131a28 !important;
         border-color: #2d3f5a !important;
+        border-radius: 8px !important;
     }
     [data-baseweb="base-input"] input,
     [data-baseweb="base-input"] textarea,
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
     input[class*="st-"],
     textarea[class*="st-"] {
-        background-color: transparent !important;
-        color: #e2e8f0 !important;
+        background-color: #131a28 !important;
+        color: #f3f4f6 !important;
+        -webkit-text-fill-color: #f3f4f6 !important;
+    }
+    input::placeholder,
+    textarea::placeholder {
+        color: #64748b !important;
+        -webkit-text-fill-color: #64748b !important;
+        opacity: 1 !important;
+    }
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus {
+        -webkit-box-shadow: 0 0 0 1000px #131a28 inset !important;
+        -webkit-text-fill-color: #f3f4f6 !important;
     }
 
     /* ── Fix file uploader dropzone ── */
