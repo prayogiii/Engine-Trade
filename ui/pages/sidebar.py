@@ -209,14 +209,6 @@ def render_sidebar():
                 transform: translateY(-1px);
             }
 
-            /* Inputs */
-            section[data-testid="stSidebar"] .stTextInput > div > div > input,
-            section[data-testid="stSidebar"] .stNumberInput > div > div > input,
-            section[data-testid="stSidebar"] .stSelectbox > div > div > div {
-                border-radius: 8px;
-                font-size: 12px;
-            }
-
             /* Expander polish */
             section[data-testid="stSidebar"] details {
                 border: 1px solid #1e293b !important;
@@ -259,33 +251,88 @@ def render_sidebar():
             section[data-testid="stSidebar"] [data-baseweb="input"],
             section[data-testid="stSidebar"] [data-baseweb="textarea"],
             section[data-testid="stSidebar"] div[data-testid="stTextInput"] div[data-baseweb="input"],
-            section[data-testid="stSidebar"] div[data-testid="stTextInput"] div[data-baseweb="base-input"],
-            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="input"],
-            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="base-input"] {
-                background-color: #131a28 !important;
-                border-color: #2d3f5a !important;
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="input"] {
+                background-color: #141a26 !important;
+                border: 1px solid #232d3f !important;
                 border-radius: 8px !important;
+                transition: all 0.2s ease-in-out !important;
             }
+
+            section[data-testid="stSidebar"] div[data-testid="stTextInput"] div[data-baseweb="input"]:hover,
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="input"]:hover,
+            section[data-testid="stSidebar"] [data-baseweb="select"] > div:first-child:hover {
+                border-color: #334155 !important;
+            }
+
+            section[data-testid="stSidebar"] div[data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
+            section[data-testid="stSidebar"] [data-baseweb="select"] > div:first-child:focus-within {
+                border-color: #00ffcc !important;
+                box-shadow: 0 0 0 1px #00ffcc33, 0 0 10px rgba(0, 255, 204, 0.15) !important;
+            }
+
             section[data-testid="stSidebar"] [data-baseweb="base-input"] input,
             section[data-testid="stSidebar"] [data-baseweb="base-input"] textarea,
             section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
             section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input,
             section[data-testid="stSidebar"] input {
-                color: #f3f4f6 !important;
-                -webkit-text-fill-color: #f3f4f6 !important;
-                background-color: #131a28 !important;
+                background-color: transparent !important;
+                color: #f1f5f9 !important;
+                -webkit-text-fill-color: #f1f5f9 !important;
+                font-size: 13px !important;
+                font-weight: 500 !important;
             }
+
             section[data-testid="stSidebar"] input::placeholder,
-            section[data-testid="stSidebar"] textarea::placeholder {
-                color: #64748b !important;
-                -webkit-text-fill-color: #64748b !important;
-                opacity: 1 !important;
+            section[data-testid="stSidebar"] textarea::placeholder,
+            section[data-testid="stSidebar"] [data-baseweb="base-input"] input::placeholder {
+                color: #94a3b8 !important;
+                -webkit-text-fill-color: #94a3b8 !important;
+                opacity: 0.85 !important;
+                font-weight: 400 !important;
             }
+
+            /* NumberInput step buttons (- / +) */
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] button {
+                background-color: #141a26 !important;
+                border: none !important;
+                border-left: 1px solid #232d3f !important;
+                border-radius: 0 !important;
+                color: #94a3b8 !important;
+                transition: all 0.15s ease !important;
+            }
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] button:hover {
+                background-color: #1e293b !important;
+                color: #00ffcc !important;
+            }
+            section[data-testid="stSidebar"] div[data-testid="stNumberInput"] button:last-child {
+                border-top-right-radius: 7px !important;
+                border-bottom-right-radius: 7px !important;
+            }
+
+            /* Selectbox / Dropdown */
+            section[data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
+                background-color: #141a26 !important;
+                border: 1px solid #232d3f !important;
+                border-radius: 8px !important;
+                color: #f1f5f9 !important;
+                font-size: 13px !important;
+                transition: all 0.2s ease-in-out !important;
+            }
+            section[data-testid="stSidebar"] [data-baseweb="select"] svg {
+                fill: #94a3b8 !important;
+            }
+            section[data-testid="stSidebar"] [data-baseweb="select"]:hover svg {
+                fill: #00ffcc !important;
+            }
+
+            /* Fix browser autofill */
             section[data-testid="stSidebar"] input:-webkit-autofill,
             section[data-testid="stSidebar"] input:-webkit-autofill:hover,
             section[data-testid="stSidebar"] input:-webkit-autofill:focus {
-                -webkit-box-shadow: 0 0 0 1000px #131a28 inset !important;
-                -webkit-text-fill-color: #f3f4f6 !important;
+                -webkit-box-shadow: 0 0 0 1000px #141a26 inset !important;
+                -webkit-text-fill-color: #f1f5f9 !important;
+                transition: background-color 5000s ease-in-out 0s;
             }
 
             /* ── File uploader di sidebar ── */
@@ -298,12 +345,6 @@ def render_sidebar():
             }
             section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"]:hover {
                 border-color: #00ffcc !important;
-            }
-
-            /* ── Selectbox di sidebar ── */
-            section[data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
-                background-color: #192132 !important;
-                border-color: #2d3f5a !important;
             }
 
             /* ── Expander content di sidebar ── */
