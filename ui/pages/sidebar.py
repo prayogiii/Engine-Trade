@@ -253,17 +253,44 @@ def render_sidebar():
                 border: none !important;
                 box-shadow: none !important;
             }
-            /* Fix input field bg agar tidak gelap double */
-            section[data-testid="stSidebar"] .stTextInput input,
-            section[data-testid="stSidebar"] .stNumberInput input {
-                background-color: #1e293b !important;
-                border-color: #334155 !important;
-                color: #e2e8f0 !important;
+
+            /* ── Base Web input di sidebar ── */
+            section[data-testid="stSidebar"] [data-baseweb="base-input"],
+            section[data-testid="stSidebar"] [data-baseweb="input"],
+            section[data-testid="stSidebar"] [data-baseweb="textarea"] {
+                background-color: #192132 !important;
+                border-color: #2d3f5a !important;
             }
-            /* Fix selectbox */
-            section[data-testid="stSidebar"] .stSelectbox > div > div {
-                background-color: #1e293b !important;
-                border-color: #334155 !important;
+            section[data-testid="stSidebar"] [data-baseweb="base-input"] input,
+            section[data-testid="stSidebar"] [data-baseweb="base-input"] textarea {
+                color: #e2e8f0 !important;
+                background-color: transparent !important;
+            }
+
+            /* ── File uploader di sidebar ── */
+            section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
+            section[data-testid="stSidebar"] [data-testid="stFileUploader"] > section {
+                background-color: #192132 !important;
+                border-color: #2d3f5a !important;
+                border-style: dashed !important;
+                border-radius: 8px !important;
+            }
+            section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"]:hover {
+                border-color: #00ffcc !important;
+            }
+
+            /* ── Selectbox di sidebar ── */
+            section[data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
+                background-color: #192132 !important;
+                border-color: #2d3f5a !important;
+            }
+
+            /* ── Expander content di sidebar ── */
+            section[data-testid="stSidebar"] [data-testid="stExpander"] details,
+            section[data-testid="stSidebar"] details {
+                background-color: #101827 !important;
+                border: 1px solid #1e293b !important;
+                border-radius: 10px !important;
             }
             </style>
         """, unsafe_allow_html=True)
