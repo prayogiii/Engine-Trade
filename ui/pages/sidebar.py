@@ -70,7 +70,6 @@ def render_sidebar():
     with st.sidebar:
         # SIDEBAR CUSTOM STYLING
         st.markdown("""
-            <meta name="darkreader-lock">
             <style>
             /* Sidebar container */
             section[data-testid="stSidebar"] {
