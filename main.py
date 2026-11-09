@@ -109,39 +109,94 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* ── Fix Base Web input / textarea background ── */
+    /* ── Form Controls (Input, NumberInput, Selectbox, Dropdown) ── */
     [data-baseweb="base-input"],
     [data-baseweb="input"],
     [data-baseweb="textarea"],
     div[data-testid="stTextInput"] div[data-baseweb="input"],
-    div[data-testid="stTextInput"] div[data-baseweb="base-input"],
-    div[data-testid="stNumberInput"] div[data-baseweb="input"],
-    div[data-testid="stNumberInput"] div[data-baseweb="base-input"] {
-        background-color: #131a28 !important;
-        border-color: #2d3f5a !important;
+    div[data-testid="stNumberInput"] div[data-baseweb="input"] {
+        background-color: #141a26 !important;
+        border: 1px solid #232d3f !important;
         border-radius: 8px !important;
+        transition: all 0.2s ease-in-out !important;
     }
+
+    div[data-testid="stTextInput"] div[data-baseweb="input"]:hover,
+    div[data-testid="stNumberInput"] div[data-baseweb="input"]:hover,
+    [data-baseweb="select"] > div:first-child:hover {
+        border-color: #334155 !important;
+    }
+
+    div[data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
+    div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
+    [data-baseweb="select"] > div:first-child:focus-within {
+        border-color: #00ffcc !important;
+        box-shadow: 0 0 0 1px #00ffcc33, 0 0 10px rgba(0, 255, 204, 0.15) !important;
+    }
+
     [data-baseweb="base-input"] input,
     [data-baseweb="base-input"] textarea,
     div[data-testid="stTextInput"] input,
     div[data-testid="stNumberInput"] input,
     input[class*="st-"],
     textarea[class*="st-"] {
-        background-color: #131a28 !important;
-        color: #f3f4f6 !important;
-        -webkit-text-fill-color: #f3f4f6 !important;
+        background-color: transparent !important;
+        color: #f1f5f9 !important;
+        -webkit-text-fill-color: #f1f5f9 !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
     }
+
     input::placeholder,
-    textarea::placeholder {
-        color: #64748b !important;
-        -webkit-text-fill-color: #64748b !important;
-        opacity: 1 !important;
+    textarea::placeholder,
+    [data-baseweb="base-input"] input::placeholder {
+        color: #94a3b8 !important;
+        -webkit-text-fill-color: #94a3b8 !important;
+        opacity: 0.85 !important;
+        font-weight: 400 !important;
     }
+
+    /* NumberInput buttons (- / +) */
+    div[data-testid="stNumberInput"] button {
+        background-color: #141a26 !important;
+        border: none !important;
+        border-left: 1px solid #232d3f !important;
+        border-radius: 0 !important;
+        color: #94a3b8 !important;
+        transition: all 0.15s ease !important;
+    }
+    div[data-testid="stNumberInput"] button:hover {
+        background-color: #1e293b !important;
+        color: #00ffcc !important;
+    }
+    div[data-testid="stNumberInput"] button:last-child {
+        border-top-right-radius: 7px !important;
+        border-bottom-right-radius: 7px !important;
+    }
+
+    /* Selectbox / Dropdown */
+    [data-baseweb="select"] > div:first-child {
+        background-color: #141a26 !important;
+        border: 1px solid #232d3f !important;
+        border-radius: 8px !important;
+        color: #f1f5f9 !important;
+        font-size: 13px !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    [data-baseweb="select"] svg {
+        fill: #94a3b8 !important;
+    }
+    [data-baseweb="select"]:hover svg {
+        fill: #00ffcc !important;
+    }
+
+    /* Fix browser autofill */
     input:-webkit-autofill,
     input:-webkit-autofill:hover,
     input:-webkit-autofill:focus {
-        -webkit-box-shadow: 0 0 0 1000px #131a28 inset !important;
-        -webkit-text-fill-color: #f3f4f6 !important;
+        -webkit-box-shadow: 0 0 0 1000px #141a26 inset !important;
+        -webkit-text-fill-color: #f1f5f9 !important;
+        transition: background-color 5000s ease-in-out 0s;
     }
 
     /* ── Fix file uploader dropzone ── */
@@ -155,17 +210,6 @@ st.markdown("""
     [data-testid="stFileUploaderDropzone"]:hover {
         border-color: #00ffcc !important;
         background-color: rgba(0,255,204,0.04) !important;
-    }
-
-    /* ── Fix selectbox / dropdown ── */
-    [data-baseweb="select"] > div:first-child {
-        background-color: #1a2235 !important;
-        border-color: #2d3f5a !important;
-    }
-
-    /* ── Fix number input ── */
-    [data-testid="stNumberInput"] [data-baseweb="input"] {
-        background-color: #1a2235 !important;
     }
 
     /* ── Fix checkbox area ── */
