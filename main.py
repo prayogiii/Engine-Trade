@@ -80,6 +80,32 @@ st.markdown("""
     .ai-insight-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-radius: 16px; padding: 20px; margin: 15px 0; border-left: 5px solid #8b5cf6; color: #cbd5e1; font-size: 15px; line-height: 1.6; }
     .ai-insight-card h3 { color: #a78bfa; margin-top: 0; font-size: 20px; }
     .ai-insight-card p { margin-bottom: 10px; }
+
+    /* Fix column containers — Streamlit versi baru kadang inject background gelap */
+    [data-testid="stColumn"],
+    [data-testid="column"],
+    .stColumn {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+
+    /* Fix Plotly chart container agar background menyatu */
+    .stPlotlyChart {
+        background: transparent !important;
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    .stPlotlyChart iframe,
+    .stPlotlyChart > div {
+        background: transparent !important;
+    }
+
+    /* Metric containers — fix bg gelap */
+    [data-testid="stMetric"],
+    [data-testid="metric-container"] {
+        background: transparent !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
