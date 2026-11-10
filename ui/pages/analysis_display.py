@@ -31,11 +31,58 @@ from services.sheets_client import (
     update_v12_memory,
 )
 # ═══════════════════════════════════════════════════════════════
-# PUBLIC API
+# HELPER BAR CHART TRANSPARAN
 # ═══════════════════════════════════════════════════════════════
-def display_analysis_result(res):
-    """Render seluruh hasil analisis ke UI. Body di bawah."""
-    # ...body kamu...
+def _render_transparent_bar_chart(data, color="#38bdf8", height=240, y_format=None):
+    """Render bar chart dengan Plotly agar background 100% transparan menyatu."""
+    if isinstance(data, pd.Series):
+        x = list(data.index)
+        y = [float(v) for v in data.values]
+    elif isinstance(data, pd.DataFrame):
+        col = data.columns[0]
+        x = list(data.index)
+        y = [float(v) for v in data[col].values]
+    elif isinstance(data, dict):
+        x = list(data.keys())
+        y = [float(v) for v in data.values()]
+    else:
+        st.bar_chart(data)
+        return
+
+    custom_hover = '%{x}: <b>%{y:.2f}</b><extra></extra>'
+    if y_format == "percent":
+        custom_hover = '%{x}: <b>%{y:.1%}</b><extra></extra>'
+
+    fig = go.Figure(go.Bar(
+        x=x,
+        y=y,
+        marker=dict(
+            color=color,
+            line=dict(width=0),
+        ),
+        hovertemplate=custom_hover,
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        height=height,
+        margin=dict(l=5, r=5, t=10, b=10),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            tickangle=-90,
+            tickfont=dict(size=10, color='#94a3b8'),
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.06)',
+            zeroline=False,
+            tickfont=dict(size=10, color='#94a3b8'),
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
 
 # ═══════════════════════════════════════════════════════════════
 # PUBLIC API
@@ -598,8 +645,7 @@ def display_analysis_result(res):
         else:
             display_adaptive_w = adaptive_w
 
-        w_df = pd.DataFrame.from_dict(display_adaptive_w, orient='index', columns=['Weight'])
-        st.bar_chart(w_df)
+        _render_transparent_bar_chart(display_adaptive_w, color="#38bdf8", height=240, y_format="percent")
 
         if display_adaptive_w:
             max_factor = max(display_adaptive_w, key=display_adaptive_w.get)
@@ -774,10 +820,10 @@ def display_analysis_result(res):
             col_a, col_e = st.columns(2)
             with col_a:
                 st.caption("✅ Accuracy (higher = better)")
-                st.bar_chart(pd.Series(acc_data))
+                _render_transparent_bar_chart(acc_data, color="#38bdf8", height=220, y_format="percent")
             with col_e:
                 st.caption("⚠️ Error EMA (lower = better)")
-                st.bar_chart(pd.Series(err_data))
+                _render_transparent_bar_chart(err_data, color="#38bdf8", height=220)
 
             best_factor = max(acc_data, key=acc_data.get)
             worst_factor = min(acc_data, key=acc_data.get)
