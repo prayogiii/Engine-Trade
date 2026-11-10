@@ -92,15 +92,21 @@ st.markdown("""
         box-shadow: none !important;
     }
 
-    /* ── Fix Plotly chart container agar background menyatu ── */
-    .stPlotlyChart {
+    /* ── Fix Chart containers agar background 100% menyatu ── */
+    .stPlotlyChart,
+    [data-testid="stVegaLiteChart"],
+    .stVegaLiteChart {
         background: transparent !important;
         border-radius: 12px;
         overflow: hidden;
     }
     .stPlotlyChart iframe,
-    .stPlotlyChart > div {
+    .stPlotlyChart > div,
+    [data-testid="stVegaLiteChart"] > div,
+    .vega-embed,
+    .vega-embed summary {
         background: transparent !important;
+        background-color: transparent !important;
     }
 
     /* ── Metric containers — fix bg gelap ── */
