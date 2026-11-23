@@ -1,12 +1,49 @@
-'''text
+# 📊 IDX Analyzer
+
+Tool analisis saham IDX dengan pendekatan VSA + Bandarmology + AI Vision.
+
+## ✨ Fitur
+- Backtest engine
+- VSA (Volume Spread Analysis)
+- Bandarmology detection
+- AI Analysis (Gemini Vision)
+
+## 📁 Struktur
+
+```
 .
-├── config/          # Pengaturan broker, kalender bursa, dan env
-├── core/            # Engine utama (Backtest, VSA, Bandarmology, dll)
-├── prompts/         # Prompt AI untuk Gemini (Vision, Analysis)
-├── services/        # Integrasi API (YFinance, Gemini, IDX, Sheets)
-├── state/           # Session management
-├── tests/           # Unit & integration tests (PyTest)
-├── ui/              # Streamlit/Dash UI (Charts, Pages, Components)
-├── bridge_server.py # Server jembatan (mungkin untuk integrasi lokal?)
-├── main.py          # Entry point aplikasi
+├── config/
+├── core/
+├── prompts/
+├── services/
+├── state/
+├── tests/
+├── ui/
+├── bridge_server.py
+├── main.py
 └── requirements.txt
+```
+
+## ⚙️ Instalasi
+
+```bash
+git clone <repo>
+cd <repo>
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## ▶️ Menjalankan
+
+```bash
+python main.py
+# atau untuk UI
+streamlit run ui/app.py
+```
+
+## 🧪 Testing
+
+```bash
+pytest tests/
+```
