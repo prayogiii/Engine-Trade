@@ -980,6 +980,23 @@ def display_analysis_result(res):
                 hasil_ai_bersih = bersihkan_teks_ai(hasil_ai)
                 html_ai = f'<div class="ai-insight-card"><h3>🤖 Insight AI</h3><p>{hasil_ai_bersih}</p></div>'
                 st.markdown(html_ai, unsafe_allow_html=True)
+                
+                # ═══ TAMBAHKAN BLOK INI UNTUK SIMPAN KE DATABASE ═══
+                try:
+                    from services.sheets_client import simpan_riwayat
+                    # Masukkan hasil AI ke dalam ringkasan
+                    res["ringkasan"]["AI_Insight"] = hasil_ai
+                    # Simpan dengan mode update agar tidak membuat baris baru
+                    simpan_riwayat(
+                        res["ringkasan"], 
+                        aksi_mode="update", 
+                        target_saham=ticker_raw
+                    )
+                except Exception as e:
+                    # Jika gagal, jangan hentikan aplikasi, cukup print di background
+                    print(f"Gagal simpan AI ke database: {e}")
+                # ══════════════════════════════════════════════════
+                
             elif error_ai:
                 st.warning(f"AI tidak dapat memberikan insight: {error_ai}")
     else:
