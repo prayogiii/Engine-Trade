@@ -23,6 +23,14 @@ from prompts.mode_evaluation import build_mode_evaluation_prompt
 from prompts.riwayat_analysis import build_riwayat_header, RIWAYAT_ANALYSIS_SUFFIX
 from services.sheets_client import load_broksum_history
 
+# ═══ TAMBAHKAN IMPORT INI ═══
+# Sesuaikan nama fungsinya dengan yang ada di file database/sheets_client kamu
+try:
+    from services.sheets_client import load_foreign_flow_history
+except ImportError:
+    # Fallback dummy function sementara kalau belum dibuat
+    def load_foreign_flow_history(ticker): return []
+
 
 # ═══════════════════════════════════════════════════════════════
 # PIL / IMAGE SUPPORT
@@ -459,7 +467,9 @@ def analisis_saham_dengan_ai(data_saham, riwayat, api_key, ticker=None):
     broksum_context = ""
     if ticker:
         try:
+            from services.sheets_client import load_broksum_history
             history = load_broksum_history(ticker)
+            # ... (bagian broksum biarkan sama seperti aslinya) ...
             if history:
                 history_sorted = sorted(
                     history, key=lambda r: str(r.get("upload_date", "")), reverse=True
@@ -490,12 +500,47 @@ def analisis_saham_dengan_ai(data_saham, riwayat, api_key, ticker=None):
         except Exception:
             pass
 
-    prompt = build_stock_analysis_prompt(data_saham, riwayat_text, broksum_context)
+    # ═══ TAMBAHAN BARU: Ambil Tren Foreign Flow dari DataFrame Sheets ═══
+    foreign_flow_trend_text = ""
+    if ticker:
+        try:
+            from services.sheets_client import load_foreign_flow_history
+            
+            # load_foreign_flow_history mengembalikan DataFrame
+            f_df = load_foreign_flow_history(ticker, days=30)
+            
+            if f_df is not None and not f_df.empty:
+                # Ambil 5 hari terakhir untuk dikirim ke AI
+                last_5_days = f_df.tail(5)
+                
+                foreign_flow_trend_text = "**📈 Tren Foreign Flow (Beberapa Hari Terakhir):**\n"
+                for _, row in last_5_days.iterrows():
+                    f_date = row.get('date', 'N/A')
+                    f_buy = row.get('foreign_buy', 0)
+                    f_sell = row.get('foreign_sell', 0)
+                    f_net = row.get('net_foreign', 0)
+                    
+                    # Helper untuk memformat angka desimal menjadi Juta (Jt) / Miliar (M)
+                    def fmt_num(n):
+                        if n >= 1e12: return f"{n/1e12:.2f} T"
+                        if n >= 1e9: return f"{n/1e9:.2f} M"
+                        if n >= 1e6: return f"{n/1e6:.2f} Jt"
+                        return f"{n:,.0f}"
+                        
+                    foreign_flow_trend_text += f"- {f_date}: Net {fmt_num(f_net)} (Buy: {fmt_num(f_buy)}, Sell: {fmt_num(f_sell)})\n"
+        except Exception as e:
+            print(f"Gagal load foreign_flow_history di gemini_client: {e}")
+    # ═══════════════════════════════════════════════════════════════
+
+    # Masukkan variabel foreign_flow_trend_text ke dalam prompt
+    prompt = build_stock_analysis_prompt(
+        data_saham, riwayat_text, broksum_context, foreign_flow_trend_text
+    )
+    
     response_text, err = call_gemini_auto_rotate(prompt)
     if err:
         return None, f"Gagal menghasilkan insight AI: {err}"
     return response_text, None
-
 
 def analisis_riwayat_global(riwayat_data, riwayat_actual, api_key):
     if not riwayat_data:
@@ -617,6 +662,8 @@ def analisis_broksum_gemini_vision(image, api_key):
 
     except Exception as e:
         return None, f"Error Gemini Vision: {str(e)}"
+
+
 # ═══════════════════════════════════════════════════════════════
 # NEWS SENTIMENT EXTRACTION (Poin 5b)
 # ═══════════════════════════════════════════════════════════════
