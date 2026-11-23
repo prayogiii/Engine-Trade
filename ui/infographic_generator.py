@@ -1,311 +1,432 @@
+"""Infografis sinyal saham (Swing + Daytrade) dalam satu gambar.
+
+Fungsi publik: generate_infographic_combined(res_swing, res_dt) -> io.BytesIO (PNG)
+Key dict yang dibaca sama seperti versi lama: Saham, Harga, Sinyal, Score, RRR,
+Confidence, Foreign_Net_Buy, Foreign_Net_Sell, AI_Insight, TP_Harga, SL_Harga,
+RSI, Vol_Surge, ZScore, Beta, Momentum, Rezim, Coppock.
+"""
 import io
+import os
 import re
-from datetime import datetime
-import matplotlib.pyplot as plt
+from datetime import datetime, timedelta, timezone
+
+import matplotlib
+import numpy as np
 import yfinance as yf
+from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
 from PIL import Image, ImageDraw, ImageFont
 
+# ── Palet ────────────────────────────────────────────────────────────────────
+BG = "#0e1726"
+SURFACE = "#152238"
+RULE = "#26385a"
+TEXT = "#eef2f7"
+MUTED = "#8fa1bd"
+UP = "#34d399"
+DOWN = "#fb7185"
+WARN = "#fbbf24"
+SWING = "#a78bfa"      # penanda strategi swing
+DAYTRADE = "#38bdf8"   # penanda strategi daytrade
 
-def generate_infographic_combined(res_swing, res_dt):
-    """Redesign infografis SW & DT bergaya dark dashboard (1600 x 1200)."""
+# ── Ukuran (koordinat logis; dirender 2x lalu diperkecil agar halus) ──────────
+W, M, GAP = 1200, 40, 24
+SCALE = 2
+CARDS_Y, CARD_H = 364, 696
+H = CARDS_Y + CARD_H + 64
 
-    base_res = res_swing or res_dt or {}
 
-    # 1. Ekstrak Ticker & Data yfinance
-    raw_ticker = base_res.get("Saham") or base_res.get("ticker_raw") or "N/A"
-    ticker = str(raw_ticker).replace(".JK", "").strip().upper()
-    ticker_jk = f"{ticker}.JK"
+# ── Font ─────────────────────────────────────────────────────────────────────
+_FONTS = {
+    False: ["segoeui.ttf", "arial.ttf", "Arial.ttf", "Roboto-Regular.ttf", "DejaVuSans.ttf"],
+    True: ["segoeuib.ttf", "arialbd.ttf", "Arial Bold.ttf", "Roboto-Bold.ttf", "DejaVuSans-Bold.ttf"],
+}
+_font_cache = {}
 
-    pt_name = "Nama Perusahaan Tidak Diketahui"
-    sector_label = "IDX EQUITY"
-    df_chart = None
-    try:
-        if ticker and ticker != "N/A":
-            t = yf.Ticker(ticker_jk)
-            info = t.info or {}
-            pt_name = info.get("longName") or info.get("shortName") or ticker
-            sector_raw = info.get("sector") or info.get("industry")
-            if sector_raw:
-                sector_label = f"INDONESIA SECTOR: {str(sector_raw).upper()}"
-            df_chart = t.history(period="1mo")
-    except Exception:
-        pass
 
-    # 2. Setup Kanvas & Palet Warna
-    W, H = 1600, 1200
-    BG_COLOR = "#0b0e14"
-    CARD_BG = "#131822"
-    INNER_BG = "#19202e"
-    BORDER_COLOR = "#252f42"
-    TEXT_MAIN = "#f8fafc"
-    TEXT_MUTED = "#94a3b8"
-    CYAN = "#00ffcc"
-    PURPLE = "#9333ea"
-    TEAL = "#06b6d4"
-    GREEN = "#10b981"
-    RED = "#ef4444"
+def _font(size, bold=False):
+    key = (size, bold)
+    if key in _font_cache:
+        return _font_cache[key]
+    px = round(size * SCALE)
+    bundled = os.path.join(
+        matplotlib.get_data_path(), "fonts", "ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    )
+    font = None
+    for name in _FONTS[bold] + [bundled]:  # DejaVu bawaan matplotlib = jaring pengaman
+        try:
+            font = ImageFont.truetype(name, px)
+            break
+        except OSError:
+            continue
+    if font is None:
+        try:
+            font = ImageFont.load_default(px)
+        except TypeError:
+            font = ImageFont.load_default()
+    _font_cache[key] = font
+    return font
 
-    img = Image.new("RGB", (W, H), color=BG_COLOR)
-    draw = ImageDraw.Draw(img)
 
-    # 3. Load Font (Prioritas font sistem agar tidak jatuh ke font kecil / missing glyph)
-    def get_font(size, bold=False):
-        candidates = (
-            [
-                "arialbd.ttf",
-                "Arial Bold.ttf",
-                "DejaVuSans-Bold.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                "arial.ttf",
-            ]
-            if bold
-            else [
-                "arial.ttf",
-                "Arial.ttf",
-                "DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            ]
-        )
-        for f in candidates:
-            try:
-                return ImageFont.truetype(f, size)
-            except Exception:
-                pass
-        return ImageFont.load_default()
+# ── Kanvas ───────────────────────────────────────────────────────────────────
+class _Canvas:
+    def __init__(self, w, h):
+        self.img = Image.new("RGB", (w * SCALE, h * SCALE), BG)
+        self.d = ImageDraw.Draw(self.img)
 
-    font_ticker = get_font(54, True)
-    font_price = get_font(48, True)
-    font_badge = get_font(16, True)
-    font_h2 = get_font(30, True)
-    font_sub = get_font(22)
-    font_val = get_font(23, True)
-    font_small = get_font(18)
-    font_xs = get_font(16)
+    @staticmethod
+    def _px(*v):
+        return [round(i * SCALE) for i in v]
 
-    def text_w(text, font):
-        bbox = draw.textbbox((0, 0), str(text), font=font)
-        return bbox[2] - bbox[0]
+    def rect(self, x0, y0, x1, y1, fill=None, r=0):
+        box = self._px(x0, y0, x1, y1)
+        if r:
+            self.d.rounded_rectangle(box, radius=round(r * SCALE), fill=fill)
+        else:
+            self.d.rectangle(box, fill=fill)
 
-    def text_h(text, font):
-        bbox = draw.textbbox((0, 0), str(text), font=font)
-        return bbox[3] - bbox[1]
+    def circle(self, cx, cy, r, fill):
+        self.d.ellipse(self._px(cx - r, cy - r, cx + r, cy + r), fill=fill)
 
-    def draw_wrapped_lines(text, x, y, max_w, max_lines, font, fill, line_h=24, prefix_bullet=False):
-        clean = re.sub(r"<[^>]+>", " ", str(text or "")).strip()
-        if not clean or clean.lower() == "none":
-            return y
+    def hline(self, x0, x1, y, color):
+        self.d.line(self._px(x0, y, x1, y), fill=color, width=SCALE)
 
-        # Pisahkan berdasarkan titik / newline jika ada agar poin terlihat rapi seperti bullet
-        raw_parts = [p.strip() for p in re.split(r"[\n]+|(?<=\.)\s+", clean) if p.strip()]
-        if not raw_parts:
-            raw_parts = [clean]
+    def text(self, x, y, s, font, fill, anchor="la"):
+        self.d.text((x * SCALE, y * SCALE), s, font=font, fill=fill, anchor=anchor)
 
-        lines_drawn = 0
-        cur_y = y
-        for part in raw_parts:
-            prefix = "• " if prefix_bullet else ""
-            words = (prefix + part).split()
-            line = ""
-            for w in words:
-                test = f"{line} {w}".strip()
-                if text_w(test, font) <= max_w:
-                    line = test
-                else:
-                    if line:
-                        draw.text((x, cur_y), line, font=font, fill=fill)
-                        cur_y += line_h
-                        lines_drawn += 1
-                        if lines_drawn >= max_lines:
-                            return cur_y
-                    line = w
-            if line:
-                draw.text((x, cur_y), line, font=font, fill=fill)
-                cur_y += line_h
-                lines_drawn += 1
-                if lines_drawn >= max_lines:
-                    return cur_y
-        return cur_y
+    def tw(self, s, font):
+        return self.d.textlength(s, font=font) / SCALE
 
-    def pick_val(res, keys, default="-"):
-        if not res:
-            return default
-        for k in keys:
-            if k in res and res[k] is not None and str(res[k]).strip() != "":
-                return res[k]
+    def paste(self, im, x, y):
+        self.img.paste(im, (round(x * SCALE), round(y * SCALE)))
+
+
+# ── Helper data & teks ───────────────────────────────────────────────────────
+def _txt(v, default="-"):
+    if v is None:
         return default
+    s = str(v).strip()
+    return default if s.lower() in ("", "none", "nan") else s
 
-    # ═══════════════════════════════════════════════════════════
-    # 1. HEADER
-    # ═══════════════════════════════════════════════════════════
-    ticker_str = f"${ticker}"
-    draw.text((50, 36), ticker_str, font=font_ticker, fill=TEXT_MAIN)
 
-    badge_x = 50 + text_w(ticker_str, font_ticker) + 22
-    badge_w = text_w(sector_label, font_badge) + 24
-    draw.rounded_rectangle([badge_x, 52, badge_x + badge_w, 84], radius=6, fill=INNER_BG, outline=BORDER_COLOR, width=1)
-    draw.text((badge_x + 12, 59), sector_label, font=font_badge, fill=TEXT_MUTED)
+def _num(v):
+    """Ambil angka pertama dari string ('1.250', '1,250', 'Rp 1.250 (+4%)')."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return None if v != v else float(v)
+    m = re.search(r"\d[\d.,]*", str(v))
+    if not m:
+        return None
+    s = m.group(0).rstrip(".,")
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s or "." in s:
+        sep = "," if "," in s else "."
+        parts = s.split(sep)
+        if len(parts) > 2 or len(parts[-1]) == 3:
+            s = s.replace(sep, "")      # pemisah ribuan
+        elif sep == ",":
+            s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
-    draw.text((50, 102), pt_name, font=font_sub, fill=TEXT_MUTED)
 
-    raw_harga = str(pick_val(base_res, ["Harga", "harga_terakhir"], "0")).strip()
-    harga_display = raw_harga if raw_harga.upper().startswith("RP") else f"Rp {raw_harga}"
-    draw.text((W - 50 - text_w(harga_display, font_price), 38), harga_display, font=font_price, fill=CYAN)
+def _idr(v):
+    return f"{v:,.0f}".replace(",", ".")
 
-    now_str = datetime.now().strftime("%d %b %Y | %H:%M WIB")
-    draw.text((W - 50 - text_w(now_str, font_small), 102), now_str, font=font_small, fill=TEXT_MUTED)
 
-    # ═══════════════════════════════════════════════════════════
-    # 2. MINI CHART (HARGA + AREA FILL + MINI VOLUME BAR)
-    # ═══════════════════════════════════════════════════════════
-    chart_y = 148
-    chart_h = 225
-    if df_chart is not None and not df_chart.empty:
-        fig = plt.figure(figsize=(15, 2.3), facecolor=BG_COLOR)
-        gs = fig.add_gridspec(2, 1, height_ratios=[4.2, 1.0], hspace=0.06)
+def _mix(c1, c2, t):
+    a = [int(c1.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    b = [int(c2.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(int(a[i] * t + b[i] * (1 - t)) for i in range(3))
 
-        ax_price = fig.add_subplot(gs[0])
-        ax_vol = fig.add_subplot(gs[1], sharex=ax_price)
 
-        for ax in (ax_price, ax_vol):
-            ax.set_facecolor(BG_COLOR)
-            for spine in ax.spines.values():
-                spine.set_visible(False)
+def _fit(cv, s, font, max_w):
+    if cv.tw(s, font) <= max_w:
+        return s
+    while s and cv.tw(s + "…", font) > max_w:
+        s = s[:-1]
+    return s.rstrip() + "…"
 
-        closes = df_chart["Close"]
-        y_min = float(closes.min()) * 0.992
-        y_max = float(closes.max()) * 1.005
 
-        ax_price.plot(df_chart.index, closes, color=CYAN, linewidth=2.4)
-        ax_price.fill_between(df_chart.index, closes, y_min, color=CYAN, alpha=0.14)
-        ax_price.set_ylim(y_min, y_max)
-        ax_price.tick_params(axis="y", colors=TEXT_MUTED, labelsize=9)
-        ax_price.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-        ax_price.grid(axis="y", color="#1b2230", linestyle="-", linewidth=0.6)
+def _fit_font(cv, s, sizes, bold, max_w):
+    for size in sizes:
+        f = _font(size, bold)
+        if cv.tw(s, f) <= max_w:
+            return f
+    return _font(sizes[-1], bold)
 
-        if "Volume" in df_chart.columns:
-            vols = df_chart["Volume"].fillna(0)
-            ax_vol.bar(df_chart.index, vols, color="#334155", width=0.65, alpha=0.85)
-        ax_vol.set_yticks([])
-        ax_vol.tick_params(axis="x", colors=TEXT_MUTED, labelsize=9)
 
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", bbox_inches="tight", facecolor=BG_COLOR, dpi=110)
-        plt.close(fig)
-        buf.seek(0)
+def _wrap(cv, text, font, max_w, max_lines):
+    lines, cur = [], ""
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if cv.tw(trial, font) <= max_w:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and cv.tw(last + "…", font) > max_w:
+            last = last.rsplit(" ", 1)[0] if " " in last else last[:-1]
+        lines[-1] = last + "…"
+    return lines
 
-        chart_img = Image.open(buf).convert("RGB").resize((W - 100, chart_h))
-        img.paste(chart_img, (50, chart_y))
 
-    # Garis Pemisah Horizontal & Vertikal Tengah
-    div_y = 395
-    draw.line([(50, div_y), (W - 50, div_y)], fill=BORDER_COLOR, width=2)
-    draw.line([(W // 2, div_y + 20), (W // 2, H - 65)], fill=BORDER_COLOR, width=2)
+def _signal_color(sig):
+    s = sig.upper()
+    if any(k in s for k in ("AVOID", "SELL", "JUAL", "HINDARI")):
+        return DOWN
+    if "BUY" in s or "BELI" in s:
+        return UP
+    return WARN
 
-    # ═══════════════════════════════════════════════════════════
-    # 3. KOLOM SWING & DAYTRADE (STYLE CARD DASHBOARD)
-    # ═══════════════════════════════════════════════════════════
-    def draw_panel(res, x0, title, accent_color):
-        col_w = (W // 2) - 85
-        y = div_y + 28
 
-        if not res:
-            draw.text((x0, y), title.upper(), font=font_h2, fill=accent_color)
-            draw.rounded_rectangle([x0, y + 48, x0 + col_w, y + 140], radius=12, fill=CARD_BG, outline=BORDER_COLOR, width=1)
-            draw.text((x0 + 20, y + 80), f"Data {title} Tidak Tersedia", font=font_sub, fill=TEXT_MUTED)
-            return
+def _sep(cv, x, w, cy):
+    cv.hline(x, x + w, cy + 12, RULE)
+    return cy + 24
 
-        # Judul Kolom + Badge Sinyal di Kanan
-        draw.text((x0, y), title.upper(), font=font_h2, fill=accent_color)
 
-        sinyal_str = str(pick_val(res, ["Sinyal", "signal"], "N/A")).strip().upper()
-        pill_w = max(110, text_w(sinyal_str, font_badge) + 32)
-        pill_h = 36
-        pill_x = x0 + col_w - pill_w
-        draw.rounded_rectangle([pill_x, y - 2, pill_x + pill_w, y - 2 + pill_h], radius=8, fill=accent_color)
-        draw.text(
-            (pill_x + (pill_w - text_w(sinyal_str, font_badge)) // 2, y - 2 + (pill_h - text_h(sinyal_str, font_badge)) // 2 - 1),
-            sinyal_str,
-            font=font_badge,
-            fill=TEXT_MAIN,
-        )
-        y += 44
+# ── Chart ────────────────────────────────────────────────────────────────────
+def _render_chart(close, w, h):
+    ys = close.to_numpy(dtype=float)
+    xs = np.arange(len(ys))
+    color = UP if ys[-1] >= ys[0] else DOWN
+    dpi = 100 * SCALE
 
-        # Baris Score | RRR | Conf
-        score_v = pick_val(res, ["Score", "signal_score"], "-")
-        rrr_v = pick_val(res, ["RRR", "rrr"], "-")
-        conf_v = pick_val(res, ["Confidence", "confidence"], "-")
-        meta_line = f"Score: {score_v}   |   RRR: {rrr_v}   |   Conf: {conf_v}"
-        draw.text((x0, y), meta_line, font=font_sub, fill=TEXT_MUTED)
-        y += 42
+    fig = Figure(figsize=(w / 100, h / 100), dpi=dpi, facecolor=SURFACE)
+    fig.subplots_adjust(left=0.012, right=0.925, top=0.95, bottom=0.2)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(SURFACE)
 
-        # Box 1: AI SUMMARY + NET BANDAR
-        box1_h = 215
-        draw.rounded_rectangle([x0, y, x0 + col_w, y + box1_h], radius=12, fill=CARD_BG, outline=BORDER_COLOR, width=1)
-        draw.text((x0 + 20, y + 16), "AI SUMMARY + NET BANDAR", font=font_xs, fill=TEXT_MUTED)
+    lo, hi = ys.min(), ys.max()
+    pad = (hi - lo) * 0.18 or max(hi * 0.02, 1)
+    ax.set_ylim(lo - pad, hi + pad)
+    ax.set_xlim(-0.4, len(ys) - 0.6)
+    ax.fill_between(xs, ys, lo - pad, color=color, alpha=0.13, linewidth=0)
+    ax.plot(xs, ys, color=color, linewidth=2.4, solid_capstyle="round")
+    ax.scatter([xs[-1]], [ys[-1]], s=70, color=color, edgecolors=SURFACE, linewidths=2.5, zorder=5)
 
-        f_buy = str(pick_val(res, ["Foreign_Net_Buy", "foreign_net_buy"], "0"))
-        f_sell = str(pick_val(res, ["Foreign_Net_Sell", "foreign_net_sell"], "0"))
-        buy_pill = f"Net Buy: {f_buy}"
-        sell_pill = f"Net Sell: {f_sell}"
+    ax.grid(axis="y", color=RULE, linewidth=0.8)
+    ax.set_axisbelow(True)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.yaxis.tick_right()
+    ax.tick_params(colors=MUTED, labelsize=9, length=0, pad=8)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: _idr(v)))
+    ticks = sorted({int(t) for t in np.linspace(0, len(ys) - 1, 5).round()})
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([close.index[i].strftime("%d %b") for i in ticks])
 
-        bp_w = text_w(buy_pill, font_xs) + 20
-        sp_w = text_w(sell_pill, font_xs) + 20
-        draw.rounded_rectangle([x0 + 20, y + 44, x0 + 20 + bp_w, y + 72], radius=6, fill="#0d2922", outline="#14532d", width=1)
-        draw.text((x0 + 30, y + 49), buy_pill, font=font_xs, fill=GREEN)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, facecolor=SURFACE)
+    buf.seek(0)
+    return Image.open(buf).convert("RGB")
 
-        draw.rounded_rectangle([x0 + 32 + bp_w, y + 44, x0 + 32 + bp_w + sp_w, y + 72], radius=6, fill="#2a1215", outline="#7f1d1d", width=1)
-        draw.text((x0 + 42 + bp_w, y + 49), sell_pill, font=font_xs, fill=RED)
 
-        insight_raw = pick_val(res, ["AI_Insight", "AI_Summary", "insight"], "")
-        draw_wrapped_lines(insight_raw, x0 + 20, y + 86, col_w - 40, max_lines=4, font=font_small, fill="#cbd5e1", line_h=28, prefix_bullet=True)
-        y += box1_h + 18
+# ── Bar level harga (SL — harga — TP) ────────────────────────────────────────
+def _levels(cv, res, x, y, w, price_raw):
+    f_cap, f_val = _font(12), _font(16, True)
+    tp_raw, sl_raw = _txt(res.get("TP_Harga")), _txt(res.get("SL_Harga"))
+    pr, tp, sl = _num(price_raw), _num(res.get("TP_Harga")), _num(res.get("SL_Harga"))
 
-        # Box 2: Coppock & Regime
-        box2_h = 58
-        draw.rounded_rectangle([x0, y, x0 + col_w, y + box2_h], radius=12, fill=CARD_BG, outline=BORDER_COLOR, width=1)
-        coppock_v = pick_val(res, ["Coppock", "coppock_status"], "-")
-        regime_v = pick_val(res, ["Rezim", "regime"], "-")
-        draw.text((x0 + 20, y + 17), f"Coppock: {coppock_v}", font=font_sub, fill=TEXT_MAIN)
-        draw.text((x0 + col_w // 2 + 10, y + 17), f"Regime: {regime_v}", font=font_sub, fill=TEXT_MAIN)
-        y += box2_h + 18
+    if None in (pr, tp, sl):  # format angka tidak terbaca: tampilkan apa adanya
+        half = w / 2
+        for i, (lab, val, col) in enumerate((("Target (TP)", tp_raw, UP), ("Stop loss (SL)", sl_raw, DOWN))):
+            cv.text(x + i * half, y + 8, lab, _font(13), MUTED, "la")
+            cv.text(x + i * half, y + 30, val, _fit_font(cv, val, (26, 22, 18), True, half - 12), col, "la")
+        return
 
-        # Box 3: Estimasi, Entry Zone, TP & SL
-        box3_h = 132
-        draw.rounded_rectangle([x0, y, x0 + col_w, y + box3_h], radius=12, fill=CARD_BG, outline=BORDER_COLOR, width=1)
-        est_netral = pick_val(res, ["Est_Netral", "est_besok_f"], "-")
-        est_sinyal = pick_val(res, ["Est_Sinyal", "est_besok_sinyal_f"], "-")
-        entry_zone = pick_val(res, ["Entry_Zone", "entry_zone_f"], "-")
-        tp_val = pick_val(res, ["TP_Harga", "tp_low_f"], "-")
-        sl_val = pick_val(res, ["SL_Harga", "sl_harga_f"], "-")
+    bx0, bx1 = x + 10, x + w - 10
+    lo, hi = min(pr, tp, sl), max(pr, tp, sl)
 
-        draw.text((x0 + 20, y + 16), f"Estimasi Netral: Rp {est_netral}  |  Sinyal: Rp {est_sinyal}", font=font_sub, fill=CYAN)
-        draw.text((x0 + 20, y + 52), f"Entry Zone: {entry_zone}", font=font_val, fill=CYAN)
-        draw.text((x0 + 20, y + 90), f"TP: Rp {tp_val}", font=font_val, fill=GREEN)
-        draw.text((x0 + col_w // 2 + 10, y + 90), f"SL: Rp {sl_val}", font=font_val, fill=RED)
-        y += box3_h + 18
+    def pos(v):
+        return bx0 + (bx1 - bx0) * (((v - lo) / (hi - lo)) if hi > lo else 0.5)
 
-        # Box 4: Indikator Teknikal
-        box4_h = 98
-        draw.rounded_rectangle([x0, y, x0 + col_w, y + box4_h], radius=12, fill=CARD_BG, outline=BORDER_COLOR, width=1)
-        rsi_v = pick_val(res, ["RSI", "rsi14"], "-")
-        vol_v = pick_val(res, ["Vol_Surge", "vol_surge_pct"], "-")
-        zs_v = pick_val(res, ["ZScore", "zscore_val"], "-")
-        beta_v = pick_val(res, ["Beta", "beta_ihsg"], "-")
-        mom_v = pick_val(res, ["Momentum", "mom_median_th"], "-")
+    py = y + 52
+    cv.rect(bx0, py - 4, bx1, py + 4, fill=RULE, r=4)
+    for target, col in ((sl, DOWN), (tp, UP)):
+        a, b = sorted((pos(pr), pos(target)))
+        if b - a > 0.5:
+            cv.rect(a, py - 4, b, py + 4, fill=col, r=min(4, (b - a) / 2))
+    px = pos(pr)
+    cv.circle(px, py, 9, TEXT)
+    cv.circle(px, py, 4, SURFACE)
 
-        draw.text((x0 + 20, y + 18), f"RSI: {rsi_v}   |   Vol Surge: {vol_v}   |   Z-Score: {zs_v}", font=font_sub, fill=TEXT_MAIN)
-        draw.text((x0 + 20, y + 54), f"Beta: {beta_v}   |   Momentum: {mom_v}", font=font_sub, fill=TEXT_MAIN)
+    price_txt = _txt(price_raw)
+    half_w = cv.tw(price_txt, f_val) / 2
+    lx = min(max(px, x + half_w), x + w - half_w)
+    cv.text(lx, y, "Harga", f_cap, MUTED, "ma")
+    cv.text(lx, y + 15, price_txt, f_val, TEXT, "ma")
 
-    draw_panel(res_swing, 50, "SWING", PURPLE)
-    draw_panel(res_dt, W // 2 + 35, "DAYTRADE", TEAL)
+    left, right = sorted(
+        (("Stop loss", sl_raw, DOWN, sl), ("Target", tp_raw, UP, tp)), key=lambda t: t[3]
+    )
+    cv.text(x, y + 66, left[0], f_cap, MUTED, "la")
+    cv.text(x, y + 80, left[1], f_val, left[2], "la")
+    cv.text(x + w, y + 66, right[0], f_cap, MUTED, "ra")
+    cv.text(x + w, y + 80, right[1], f_val, right[2], "ra")
 
-    # ═══════════════════════════════════════════════════════════
-    # 4. WATERMARK BAWAH
-    # ═══════════════════════════════════════════════════════════
-    wm_text = "Generated by Engine Trade Pro"
-    draw.text(((W - text_w(wm_text, font_small)) // 2, H - 42), wm_text, font=font_small, fill="#64748b")
 
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format="PNG")
-    img_byte_arr.seek(0)
-    return img_byte_arr
+# ── Kartu strategi ───────────────────────────────────────────────────────────
+def _card(cv, res, x, y, w, h, title, accent, fallback_price):
+    cv.rect(x, y, x + w, y + h, fill=SURFACE, r=22)
+    pad = 28
+    ix, iw, cy = x + pad, w - 2 * pad, y + pad
+    f_lab = _font(13)
+
+    cv.circle(ix + 5, cy + 10, 5, accent)
+    cv.text(ix + 18, cy + 10, title, _font(17, True), TEXT, "lm")
+    if not res:
+        cv.text(x + w / 2, y + h / 2, "Data belum tersedia", _font(18), MUTED, "mm")
+        return
+    cy += 26
+
+    # Sinyal: elemen utama kartu
+    sig = _txt(res.get("Sinyal"), "N/A").upper()
+    cv.text(ix, cy, sig, _fit_font(cv, sig, (46, 40, 34, 28), True, iw), _signal_color(sig), "la")
+    cy += 58
+
+    colw = iw / 3
+    for i, (lab, key) in enumerate((("Score", "Score"), ("Risk reward", "RRR"), ("Confidence", "Confidence"))):
+        cx = ix + i * colw
+        val = _txt(res.get(key))
+        cv.text(cx, cy, lab, f_lab, MUTED, "la")
+        cv.text(cx, cy + 20, val, _fit_font(cv, val, (24, 21, 18, 15), True, colw - 12), TEXT, "la")
+    cy = _sep(cv, ix, iw, cy + 48)
+
+    cv.text(ix, cy, "Level harga", f_lab, MUTED, "la")
+    cy += 22
+    _levels(cv, res, ix, cy, iw, res.get("Harga") or fallback_price)
+    cy = _sep(cv, ix, iw, cy + 100)
+
+    half = iw / 2
+    for i, (lab, key, col) in enumerate((("Net buy asing", "Foreign_Net_Buy", UP),
+                                         ("Net sell asing", "Foreign_Net_Sell", DOWN))):
+        cx = ix + i * half
+        val = _txt(res.get(key), "0")
+        cv.text(cx, cy, lab, f_lab, MUTED, "la")
+        cv.text(cx, cy + 20, val, _fit_font(cv, val, (20, 17, 14), True, half - 12), col, "la")
+    cy = _sep(cv, ix, iw, cy + 44)
+
+    cv.text(ix, cy, "Ringkasan AI", f_lab, MUTED, "la")
+    cy += 20
+    insight = re.sub(r"<[^>]+>", " ", str(res.get("AI_Insight") or ""))
+    insight = re.sub(r"\s+", " ", insight).strip()
+    if insight in ("", "None"):
+        insight = "Belum ada ringkasan."
+    cv.rect(ix, cy + 2, ix + 3, cy + 82, fill=accent, r=1.5)
+    f_ins = _font(15)
+    for i, line in enumerate(_wrap(cv, insight, f_ins, iw - 16, 4)):
+        cv.text(ix + 16, cy + i * 21, line, f_ins, "#cbd5e1", "la")
+    cy = _sep(cv, ix, iw, cy + 84)
+
+    cv.text(ix, cy, "Indikator teknikal", f_lab, MUTED, "la")
+    cy += 22
+    items = (("RSI", "RSI"), ("Vol surge", "Vol_Surge"), ("Z-score", "ZScore"), ("Beta", "Beta"),
+             ("Momentum", "Momentum"), ("Coppock", "Coppock"), ("Rezim", "Rezim"))
+    cw = (iw - 28) / 2
+    f_row = _font(14)
+    faint = _mix(RULE, SURFACE, 0.55)
+    for i, (lab, key) in enumerate(items):
+        col, row = divmod(i, 4)
+        cx, ry = ix + col * (cw + 28), cy + row * 30
+        val, vcol = _txt(res.get(key)), TEXT
+        if key == "RSI":
+            n = _num(val)
+            if n is not None and (n >= 70 or n <= 30):
+                vcol = WARN
+        max_w = cw - cv.tw(lab, f_row) - 14
+        vf = _fit_font(cv, val, (16, 14, 12), True, max_w)
+        cv.text(cx, ry + 15, lab, f_row, MUTED, "lm")
+        cv.text(cx + cw, ry + 15, _fit(cv, val, vf, max_w), vf, vcol, "rm")
+        if i not in (3, 6):
+            cv.hline(cx, cx + cw, ry + 30, faint)
+
+
+# ── Fungsi utama ─────────────────────────────────────────────────────────────
+def generate_infographic_combined(res_swing, res_dt, hires=False):
+    """Gabungkan hasil Swing & Daytrade jadi 1 infografis. hires=True -> output 2x."""
+    base = res_swing or res_dt or {}
+    ticker = str(base.get("Saham", "N/A")).replace(".JK", "").replace("$", "").strip() or "N/A"
+
+    pt_name, df = "Bursa Efek Indonesia", None
+    if ticker != "N/A":
+        t = yf.Ticker(f"{ticker}.JK")
+        try:
+            info = t.info or {}
+            pt_name = info.get("longName") or info.get("shortName") or pt_name
+        except Exception:
+            pass
+        try:
+            df = t.history(period="1mo")
+        except Exception:
+            pass
+
+    close = None
+    if df is not None and not df.empty and "Close" in df:
+        close = df["Close"].dropna()
+        if len(close) < 2:
+            close = None
+    chg = (close.iloc[-1] / close.iloc[-2] - 1) * 100 if close is not None else None
+
+    cv = _Canvas(W, H)
+
+    # Header
+    f_tick = _font(48, True)
+    cv.text(M, 34, ticker, f_tick, TEXT, "la")
+    cv.text(M, 96, _fit(cv, pt_name, _font(19), 640), _font(19), MUTED, "la")
+
+    price_str = _txt(base.get("Harga"), "-")
+    cv.text(W - M, 34, price_str if price_str.startswith("Rp") else f"Rp {price_str}", f_tick, TEXT, "ra")
+    now = datetime.now(timezone(timedelta(hours=7))).strftime("%d %b %Y, %H:%M WIB")
+    f_pill, f_date = _font(15, True), _font(14)
+    date_x = W - M
+    if chg is not None:
+        col = UP if chg >= 0 else DOWN
+        label = f"{chg:+.2f}%"
+        pw = cv.tw(label, f_pill) + 28
+        cv.rect(W - M - pw, 94, W - M, 122, fill=_mix(col, BG, 0.18), r=14)
+        cv.text(W - M - pw / 2, 108, label, f_pill, col, "mm")
+        date_x = W - M - pw - 14
+    cv.text(date_x, 108, now, f_date, MUTED, "rm")
+
+    # Chart
+    cv.rect(M, 140, W - M, 340, fill=SURFACE, r=22)
+    cv.text(M + 24, 158, "Penutupan 1 bulan terakhir", _font(14), MUTED, "la")
+    if close is not None:
+        cv.text(W - M - 24, 158, f"Tertinggi {_idr(close.max())}, terendah {_idr(close.min())}",
+                _font(14), MUTED, "ra")
+        cv.paste(_render_chart(close, W - 2 * M - 32, 148), M + 16, 184)
+    else:
+        cv.text(W / 2, 262, "Data chart tidak tersedia", _font(18), MUTED, "mm")
+
+    # Dua kartu
+    cw = (W - 2 * M - GAP) / 2
+    _card(cv, res_swing, M, CARDS_Y, cw, CARD_H, "Swing", SWING, price_str)
+    _card(cv, res_dt, M + cw + GAP, CARDS_Y, cw, CARD_H, "Daytrade", DAYTRADE, price_str)
+
+    # Footer
+    cv.text(W / 2, H - 32, "Engine Trade Pro. Sinyal ini alat bantu analisis, bukan rekomendasi investasi.",
+            _font(13), MUTED, "mm")
+
+    out = cv.img
+    if not hires:
+        resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        out = out.resize((W, H), resample)
+    buf = io.BytesIO()
+    out.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
