@@ -977,24 +977,48 @@ def render_sidebar():
 
                             waktu_short = waktu.split()[1] if len(waktu.split()) > 1 else waktu
 
-                            st.markdown(f"""
-                            <div style="background:#1a1d24; border-radius:8px;
-                                padding:10px 14px; margin-bottom:10px;
-                                border-left:4px solid {_border};">
-                                <div style="display:flex; justify-content:space-between;
-                                    align-items:center; flex-wrap:wrap; gap:8px;">
+                            # Bagi jadi 2 kolom: Kiri untuk info (waktu pindah ke bawah), Kanan untuk tombol
+                            col_info, col_btn = st.columns([3, 1.2])
+
+                            with col_info:
+                                st.markdown(f"""
+                                <div style="background:#1a1d24; border-radius:8px;
+                                    padding:10px 14px; margin-bottom:10px;
+                                    border-left:4px solid {_border};">
                                     <div>
                                         <span style="color:#f3f4f6; font-size:15px;
                                             font-weight:700;">{saham}</span>
                                         <span style="color:#94a3b8; font-size:11px;
                                             margin-left:8px;">@ Rp {harga_val}</span>
                                     </div>
-                                    <div style="color:#64748b; font-size:10px;">
-                                        🕒 {waktu_short}
+                                    <div style="color:#64748b; font-size:10px; margin-top:4px;">
+                                        🕒 {waktu_short} WIB
                                     </div>
                                 </div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                                """, unsafe_allow_html=True)
+                                
+                            with col_btn:
+                                # Import fungsi generator
+                                from ui.infographic_generator import generate_infographic_combined
+                                
+                                # Tombol untuk memicu pembuatan gambar
+                                if st.button("📥 Download PNG", key=f"dl_{waktu}_{saham}", use_container_width=True):
+                                    with st.spinner("Memproses gambar & menarik data yfinance..."):
+                                        try:
+                                            # Panggil fungsi generator
+                                            img_bytes = generate_infographic_combined(r_sw, r_dt)
+                                            
+                                            # Tampilkan tombol simpan
+                                            st.download_button(
+                                                label="💾 Simpan Gambar",
+                                                data=img_bytes,
+                                                file_name=f"QuantRisk_{saham}_{waktu_short.replace(':','')}.png",
+                                                mime="image/png",
+                                                key=f"save_{waktu}_{saham}",
+                                                use_container_width=True
+                                            )
+                                        except Exception as e:
+                                            st.error(f"Gagal buat infografis: {e}")
 
                             _riwayat_date = waktu[:10] if waktu else ""
                             _bs = _get_broksum_for_date(saham, _riwayat_date) if _riwayat_date else None
