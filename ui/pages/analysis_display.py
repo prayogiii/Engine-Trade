@@ -939,7 +939,9 @@ def display_analysis_result(res):
                 "Fundamental_DE": f"{de:.2f}" if de else "N/A",
                 "Status_Posisi": "Sudah memiliki saham" if sudah_beli else "Belum memiliki saham",
                 "Harga_Beli": f"Rp {harga_beli_float:,.0f}" if harga_beli_float else "Tidak diisi",
-                "Floating_PL": f"{floating_pl_pct:+.2f}%" if floating_pl_pct is not None else "N/A"
+                "Floating_PL": f"{floating_pl_pct:+.2f}%" if floating_pl_pct is not None else "N/A",
+                "Foreign_Net_Buy": res.get('foreign_net_buy', 'N/A'),
+                "Foreign_Net_Sell": res.get('foreign_net_sell', 'N/A')
             }
             riwayat_konteks = []
             for r in st.session_state.riwayat:
