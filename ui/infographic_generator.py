@@ -2,6 +2,7 @@
 import io
 import os
 import re
+import json
 from datetime import datetime, timedelta, timezone
 
 import matplotlib
@@ -26,10 +27,10 @@ WARN = "#fbbf24"
 SWING = "#a78bfa"      
 DAYTRADE = "#38bdf8"   
 
-# ── Ukuran (Ditinggikan agar muat info baru & AI lebih panjang) ──
+# ── Ukuran (Card ditambah tingginya untuk muat info baru) ──
 W, M, GAP = 1200, 40, 24
 SCALE = 2
-CARDS_Y, CARD_H = 364, 900  # Card ditinggikan
+CARDS_Y, CARD_H = 364, 930  
 H = CARDS_Y + CARD_H + 64
 
 # ── Font ──
@@ -102,11 +103,14 @@ def _txt(v, default="-"):
     s = str(v).strip()
     return default if s.lower() in ("", "none", "nan") else s
 
-def _clean_emoji(text):
-    """Menghapus emoji agar tidak jadi kotak di Pillow."""
+def _remove_emojis(text):
+    """Menghapus semua karakter non-ASCII (termasuk emoji) agar tidak jadi kotak."""
     if not text:
         return ""
-    return re.sub(r'[^\x00-\x7F]+', '', str(text)).strip()
+    # Hapus karakter di luar ASCII standar
+    text = re.sub(r'[^\x00-\x7F]+', '', str(text))
+    # Rapikan spasi ganda
+    return re.sub(r'\s+', ' ', text).strip()
 
 def _num(v):
     if v is None:
@@ -278,9 +282,9 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, flow_d
         return
     cy += 30
 
-    # 1. Sinyal (Bersih dari Emoji)
+    # 1. Sinyal (Bersih dari Emoji & Kurung)
     sig_raw = _txt(res.get("Sinyal"), "N/A").upper()
-    sig_clean = _clean_emoji(sig_raw).split('(')[0].strip() # Ambil teks depan, hapus kurung
+    sig_clean = _remove_emojis(sig_raw).split('(')[0].strip()
     cv.text(ix, cy, sig_clean, _fit_font(cv, sig_clean, (36, 32, 28, 24), True, iw), _signal_color(sig_clean), "la")
     cy += 45
 
@@ -309,47 +313,51 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, flow_d
     _levels(cv, res, ix, cy, iw, res.get("Harga") or fallback_price)
     cy = _sep(cv, ix, iw, cy + 100)
 
-    # 5. Bandar & Foreign Flow (3 Kolom)
+    # 5. Bandar & Foreign Flow (3 Kolom + 1 Baris Net)
     cv.text(ix, cy, "Foreign Flow & Broker", f_lab, MUTED, "la")
     cy += 20
     cw3 = iw / 3
     
-    # Kolom 1: Buy Asing
+    # Baris 1: Buy, Sell, Net Asing
     cv.text(ix, cy, "Buy Asing", _font(11), MUTED, "la")
     cv.text(ix, cy + 15, flow_data['buy'], _font(15, True), UP, "la")
-    # Kolom 2: Sell Asing
+    
     cv.text(ix + cw3, cy, "Sell Asing", _font(11), MUTED, "la")
     cv.text(ix + cw3, cy + 15, flow_data['sell'], _font(15, True), DOWN, "la")
-    # Kolom 3: Net Asing
+    
     cv.text(ix + cw3*2, cy, "Net Asing", _font(11), MUTED, "la")
     net_color = UP if flow_data['net_val'] >= 0 else DOWN
     cv.text(ix + cw3*2, cy + 15, flow_data['net'], _font(15, True), net_color, "la")
 
     cy += 40
     # Baris 2: Net Bandar & Retail
-    cv.text(ix, cy, f"Net Bandar: {broker_data['net_bandar']}", _font(13, True), UP if broker_data['bandar_val'] >= 0 else DOWN, "la")
-    cv.text(ix + half, cy, f"Net Retail: {broker_data['net_retail']}", _font(13, True), DOWN if broker_data['retail_val'] <= 0 else UP, "la")
+    nb_color = UP if broker_data['net_bandar'] >= 0 else DOWN
+    nr_color = DOWN if broker_data['net_retail'] <= 0 else UP
+    cv.text(ix, cy, f"Net Bandar: {broker_data['net_bandar']:+.1f}%", _font(13, True), nb_color, "la")
+    cv.text(ix + half, cy, f"Net Retail: {broker_data['net_retail']:+.1f}%", _font(13, True), nr_color, "la")
     
     cy = _sep(cv, ix, iw, cy + 30)
 
-    # 6. Ringkasan AI (Tampilkan semua teks)
+    # 6. Ringkasan AI (Redesign Rapi & Bersih)
     cv.text(ix, cy, "Ringkasan AI", f_lab, MUTED, "la")
     cy += 20
-    insight = re.sub(r"<[^>]+>", " ", str(ai_summary or ""))
-    insight = re.sub(r"\s+", " ", insight).strip()
-    if insight in ("", "None"):
+    
+    # Kotak background khusus untuk AI (gelap, membedakan dari card)
+    box_h = 135
+    cv.rect(ix, cy, ix + iw, cy + box_h, fill="#0d1626", r=8)
+    cv.rect(ix, cy, ix + 4, cy + box_h, fill=accent, r=2) # Garis aksen kiri
+    
+    insight = _remove_emojis(ai_summary)
+    if not insight:
         insight = "Belum ada ringkasan."
+        
+    f_ins = _font(12) # Font dikecilkan sedikit agar muat banyak
+    # max_lines disesuaikan dengan tinggi kotak (135px / 18px per baris = ~7 baris)
+    lines = _wrap(cv, insight, f_ins, iw - 24, max_lines=7)
+    for i, line in enumerate(lines):
+        cv.text(ix + 16, cy + 12 + i * 17, line, f_ins, "#cbd5e1", "la")
     
-    # Kotak background gelap untuk teks AI agar rapi
-    cv.rect(ix, cy, ix + iw, cy + 130, fill=BG, r=8)
-    cv.rect(ix, cy, ix + 3, cy + 130, fill=accent, r=1.5) # Garis aksen kiri
-    
-    f_ins = _font(13)
-    # Batas maksimal 8 baris agar tidak nabrak indikator di bawahnya
-    for i, line in enumerate(_wrap(cv, insight, f_ins, iw - 20, max_lines=8)):
-        cv.text(ix + 12, cy + 10 + i * 18, line, f_ins, "#cbd5e1", "la")
-    
-    cy = _sep(cv, ix, iw, cy + 140)
+    cy = _sep(cv, ix, iw, cy + box_h + 10)
 
     # 7. Indikator (Termasuk Likuiditas & Trend)
     cv.text(ix, cy, "Indikator teknikal", f_lab, MUTED, "la")
@@ -363,7 +371,7 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, flow_d
     f_row = _font(14)
     faint = _mix(RULE, SURFACE, 0.55)
     for i, (lab, key) in enumerate(items):
-        col, row = divmod(i, 4) # 2 kolom, 4 baris
+        col, row = divmod(i, 4)
         cx, ry = ix + col * (cw + 28), cy + row * 28
         val, vcol = _txt(res.get(key)), TEXT
         if key == "RSI":
@@ -374,7 +382,7 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, flow_d
         vf = _fit_font(cv, val, (16, 14, 12), True, max_w)
         cv.text(cx, ry + 12, lab, f_row, MUTED, "lm")
         cv.text(cx + cw, ry + 12, _fit(cv, val, vf, max_w), vf, vcol, "rm")
-        if i not in (3, 7): # Garis bawah
+        if i not in (3, 7):
             cv.hline(cx, cx + cw, ry + 28, faint)
 
 # ── Fungsi Utama ──
@@ -406,15 +414,32 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
     # ═══ TARIK DATA DARI DATABASE ═══
     ai_summary = "Belum ada ringkasan AI."
     flow_data = {"buy": "-", "sell": "-", "net": "-", "net_val": 0}
-    broker_data = {"net_bandar": "-", "bandar_val": 0, "net_retail": "-", "retail_val": 0}
+    broker_data = {"net_bandar": 0.0, "net_retail": 0.0}
     
     if ticker != "N/A":
         try:
-            # 1. Ambil AI Summary dari broksum_history
+            # 1. Ambil Data dari broksum_history
             broksum_data = load_broksum_history(ticker)
             if broksum_data:
                 sorted_bs = sorted(broksum_data, key=lambda x: str(x.get('upload_date', '')), reverse=True)
-                ai_summary = sorted_bs[0].get('summary_narrative', ai_summary)
+                latest_bs = sorted_bs[0]
+                ai_summary = latest_bs.get('summary_narrative', ai_summary)
+                
+                # Ekstrak Net Bandar & Retail dari full_data
+                full_data_raw = latest_bs.get('full_data', '{}')
+                try:
+                    full_data = json.loads(full_data_raw) if isinstance(full_data_raw, str) else full_data_raw
+                    stats = full_data.get('broker_summary_stats', {})
+                    
+                    b_buy = float(stats.get('buyer_bandar_pct', 0))
+                    b_sell = float(stats.get('seller_bandar_pct', 0))
+                    r_buy = float(stats.get('buyer_retail_pct', 0))
+                    r_sell = float(stats.get('seller_retail_pct', 0))
+                    
+                    broker_data['net_bandar'] = b_buy - b_sell
+                    broker_data['net_retail'] = r_buy - r_sell
+                except Exception:
+                    pass
                 
             # 2. Ambil Foreign Flow dari foreign_flow_history
             f_df = load_foreign_flow_history(ticker, days=1)
@@ -433,23 +458,6 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
                 flow_data["sell"] = fmt_flow(fs)
                 flow_data["net_val"] = net_val
                 flow_data["net"] = fmt_flow(net_val)
-
-            # 3. Ambil Net Bandar & Retail dari bandar_metadata (jika ada di result)
-            bm = base.get('bandar_metadata', {})
-            if bm:
-                # Kita asumsikan ada key raw_weighted atau score untuk net bandar
-                nb_val = bm.get('raw_weighted', 0.0)
-                nr_val = -nb_val # Retail biasanya berlawanan arah dengan bandar
-                broker_data["bandar_val"] = nb_val
-                broker_data["retail_val"] = nr_val
-                
-                def fmt_lot(n):
-                    # Format lot (jika angkanya besar, ubah ke K/M)
-                    if abs(n) >= 1000: return f"{n/1000:.1f}K Lot"
-                    return f"{n:.0f} Lot"
-                
-                broker_data["net_bandar"] = fmt_lot(nb_val * 1000) # Misal dikali 1000 buat visual
-                broker_data["net_retail"] = fmt_lot(nr_val * 1000)
 
         except Exception as e:
             print(f"Gagal load DB untuk infografis: {e}")
