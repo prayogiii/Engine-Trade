@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ── IMPORT DATABASE KAMU ──
 from services.sheets_client import load_broksum_history, load_foreign_flow_history
 
-# ── Palet ────────────────────────────────────────────────────────────────────
+# ── Palet ──
 BG = "#0e1726"
 SURFACE = "#152238"
 RULE = "#26385a"
@@ -26,13 +26,13 @@ WARN = "#fbbf24"
 SWING = "#a78bfa"      
 DAYTRADE = "#38bdf8"   
 
-# ── Ukuran ──────────
+# ── Ukuran (Ditinggikan agar muat info baru & AI lebih panjang) ──
 W, M, GAP = 1200, 40, 24
 SCALE = 2
-CARDS_Y, CARD_H = 364, 770
+CARDS_Y, CARD_H = 364, 900  # Card ditinggikan
 H = CARDS_Y + CARD_H + 64
 
-# ── Font ─────────────────────────────────────────────────────────────────────
+# ── Font ──
 _FONTS = {
     False: ["segoeui.ttf", "arial.ttf", "Arial.ttf", "Roboto-Regular.ttf", "DejaVuSans.ttf"],
     True: ["segoeuib.ttf", "arialbd.ttf", "Arial Bold.ttf", "Roboto-Bold.ttf", "DejaVuSans-Bold.ttf"],
@@ -63,7 +63,7 @@ def _font(size, bold=False):
     _font_cache[key] = font
     return font
 
-# ── Kanvas ───────────────────────────────────────────────────────────────────
+# ── Kanvas ──
 class _Canvas:
     def __init__(self, w, h):
         self.img = Image.new("RGB", (w * SCALE, h * SCALE), BG)
@@ -95,19 +95,25 @@ class _Canvas:
     def paste(self, im, x, y):
         self.img.paste(im, (round(x * SCALE), round(y * SCALE)))
 
-# ── Helper data & teks ───────────────────────────────────────────────────────
+# ── Helper ──
 def _txt(v, default="-"):
     if v is None:
         return default
     s = str(v).strip()
     return default if s.lower() in ("", "none", "nan") else s
 
+def _clean_emoji(text):
+    """Menghapus emoji agar tidak jadi kotak di Pillow."""
+    if not text:
+        return ""
+    return re.sub(r'[^\x00-\x7F]+', '', str(text)).strip()
+
 def _num(v):
     if v is None:
         return None
     if isinstance(v, (int, float)):
         return None if v != v else float(v)
-    m = re.search(r"\d[\d.,]*", str(v))
+    m = re.search(r"-?\d[\d.,]*", str(v))
     if not m:
         return None
     s = m.group(0).rstrip(".,")
@@ -150,7 +156,7 @@ def _fit_font(cv, s, sizes, bold, max_w):
             return f
     return _font(sizes[-1], bold)
 
-def _wrap(cv, text, font, max_w, max_lines):
+def _wrap(cv, text, font, max_w, max_lines=10):
     lines, cur = [], ""
     for word in text.split():
         trial = f"{cur} {word}".strip()
@@ -164,10 +170,7 @@ def _wrap(cv, text, font, max_w, max_lines):
         lines.append(cur)
     if len(lines) > max_lines:
         lines = lines[:max_lines]
-        last = lines[-1]
-        while last and cv.tw(last + "…", font) > max_w:
-            last = last.rsplit(" ", 1)[0] if " " in last else last[:-1]
-        lines[-1] = last + "…"
+        lines[-1] = lines[-1] + "..."
     return lines
 
 def _signal_color(sig):
@@ -182,7 +185,7 @@ def _sep(cv, x, w, cy):
     cv.hline(x, x + w, cy + 12, RULE)
     return cy + 24
 
-# ── Chart ────────────────────────────────────────────────────────────────────
+# ── Chart ──
 def _render_chart(close, w, h):
     ys = close.to_numpy(dtype=float)
     xs = np.arange(len(ys))
@@ -218,7 +221,7 @@ def _render_chart(close, w, h):
     buf.seek(0)
     return Image.open(buf).convert("RGB")
 
-# ── Bar level harga (SL — harga — TP) ────────────────────────────────────────
+# ── Bar Level Harga ──
 def _levels(cv, res, x, y, w, price_raw):
     f_cap, f_val = _font(12), _font(16, True)
     tp_raw, sl_raw = _txt(res.get("TP_Harga")), _txt(res.get("SL_Harga"))
@@ -261,8 +264,8 @@ def _levels(cv, res, x, y, w, price_raw):
     cv.text(x + w, y + 66, right[0], f_cap, MUTED, "ra")
     cv.text(x + w, y + 80, right[1], f_val, right[2], "ra")
 
-# ── Kartu strategi ───────────────────────────────────────────────────────────
-def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, net_buy, net_sell):
+# ── Kartu Strategi ──
+def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, flow_data, broker_data):
     cv.rect(x, y, x + w, y + h, fill=SURFACE, r=22)
     pad = 28
     ix, iw, cy = x + pad, w - 2 * pad, y + pad
@@ -273,14 +276,15 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, net_bu
     if not res:
         cv.text(x + w / 2, y + h / 2, "Data belum tersedia", _font(18), MUTED, "mm")
         return
-    cy += 26
+    cy += 30
 
-    # Sinyal: elemen utama kartu (Pangkas teks jika kepanjangan)
-    sig_full = _txt(res.get("Sinyal"), "N/A").upper()
-    sig = sig_full.split('(')[0].strip() # Hanya ambil teks depan, buang kurung
-    cv.text(ix, cy, sig, _fit_font(cv, sig, (32, 28, 24, 20), True, iw), _signal_color(sig), "la")
+    # 1. Sinyal (Bersih dari Emoji)
+    sig_raw = _txt(res.get("Sinyal"), "N/A").upper()
+    sig_clean = _clean_emoji(sig_raw).split('(')[0].strip() # Ambil teks depan, hapus kurung
+    cv.text(ix, cy, sig_clean, _fit_font(cv, sig_clean, (36, 32, 28, 24), True, iw), _signal_color(sig_clean), "la")
     cy += 45
 
+    # 2. Skor, RRR, Conf
     colw = iw / 3
     for i, (lab, key) in enumerate((("Score", "Score"), ("Risk reward", "RRR"), ("Confidence", "Confidence"))):
         cx = ix + i * colw
@@ -289,55 +293,78 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, net_bu
         cv.text(cx, cy + 20, val, _fit_font(cv, val, (24, 21, 18, 15), True, colw - 12), TEXT, "la")
     cy = _sep(cv, ix, iw, cy + 48)
 
-    # Entry & Dip Entry
+    # 3. Entry & Dip Entry
     half = iw / 2
     entry_val = _txt(res.get("Entry_Zone"), "-")
     dip_val = _txt(res.get("Entry_Ideal_RRR2"), "-")
-
     cv.text(ix, cy, "Entry Zone", f_lab, MUTED, "la")
     cv.text(ix, cy + 20, entry_val, _fit_font(cv, entry_val, (20, 18, 16), True, half - 12), accent, "la")
-
     cv.text(ix + half, cy, "Dip Entry", f_lab, MUTED, "la")
     cv.text(ix + half, cy + 20, dip_val, _fit_font(cv, dip_val, (20, 18, 16), True, half - 12), WARN, "la")
     cy = _sep(cv, ix, iw, cy + 48)
 
-    # Level Harga
+    # 4. Level Harga (TP/SL)
     cv.text(ix, cy, "Level harga", f_lab, MUTED, "la")
     cy += 22
     _levels(cv, res, ix, cy, iw, res.get("Harga") or fallback_price)
     cy = _sep(cv, ix, iw, cy + 100)
 
-    # Net Buy / Sell dari DB
-    for i, (lab, val, col) in enumerate((("Net buy asing", net_buy, UP), ("Net sell asing", net_sell, DOWN))):
-        cx = ix + i * half
-        cv.text(cx, cy, lab, f_lab, MUTED, "la")
-        cv.text(cx, cy + 20, _txt(val, "0"), _fit_font(cv, _txt(val, "0"), (20, 17, 14), True, half - 12), col, "la")
-    cy = _sep(cv, ix, iw, cy + 44)
+    # 5. Bandar & Foreign Flow (3 Kolom)
+    cv.text(ix, cy, "Foreign Flow & Broker", f_lab, MUTED, "la")
+    cy += 20
+    cw3 = iw / 3
+    
+    # Kolom 1: Buy Asing
+    cv.text(ix, cy, "Buy Asing", _font(11), MUTED, "la")
+    cv.text(ix, cy + 15, flow_data['buy'], _font(15, True), UP, "la")
+    # Kolom 2: Sell Asing
+    cv.text(ix + cw3, cy, "Sell Asing", _font(11), MUTED, "la")
+    cv.text(ix + cw3, cy + 15, flow_data['sell'], _font(15, True), DOWN, "la")
+    # Kolom 3: Net Asing
+    cv.text(ix + cw3*2, cy, "Net Asing", _font(11), MUTED, "la")
+    net_color = UP if flow_data['net_val'] >= 0 else DOWN
+    cv.text(ix + cw3*2, cy + 15, flow_data['net'], _font(15, True), net_color, "la")
 
-    # Ringkasan AI dari DB
+    cy += 40
+    # Baris 2: Net Bandar & Retail
+    cv.text(ix, cy, f"Net Bandar: {broker_data['net_bandar']}", _font(13, True), UP if broker_data['bandar_val'] >= 0 else DOWN, "la")
+    cv.text(ix + half, cy, f"Net Retail: {broker_data['net_retail']}", _font(13, True), DOWN if broker_data['retail_val'] <= 0 else UP, "la")
+    
+    cy = _sep(cv, ix, iw, cy + 30)
+
+    # 6. Ringkasan AI (Tampilkan semua teks)
     cv.text(ix, cy, "Ringkasan AI", f_lab, MUTED, "la")
     cy += 20
     insight = re.sub(r"<[^>]+>", " ", str(ai_summary or ""))
     insight = re.sub(r"\s+", " ", insight).strip()
     if insight in ("", "None"):
-        insight = "Belum ada ringkasan dari database."
-    cv.rect(ix, cy + 2, ix + 3, cy + 82, fill=accent, r=1.5)
-    f_ins = _font(14)
-    for i, line in enumerate(_wrap(cv, insight, f_ins, iw - 16, 4)):
-        cv.text(ix + 16, cy + i * 21, line, f_ins, "#cbd5e1", "la")
-    cy = _sep(cv, ix, iw, cy + 84)
+        insight = "Belum ada ringkasan."
+    
+    # Kotak background gelap untuk teks AI agar rapi
+    cv.rect(ix, cy, ix + iw, cy + 130, fill=BG, r=8)
+    cv.rect(ix, cy, ix + 3, cy + 130, fill=accent, r=1.5) # Garis aksen kiri
+    
+    f_ins = _font(13)
+    # Batas maksimal 8 baris agar tidak nabrak indikator di bawahnya
+    for i, line in enumerate(_wrap(cv, insight, f_ins, iw - 20, max_lines=8)):
+        cv.text(ix + 12, cy + 10 + i * 18, line, f_ins, "#cbd5e1", "la")
+    
+    cy = _sep(cv, ix, iw, cy + 140)
 
-    # Indikator
+    # 7. Indikator (Termasuk Likuiditas & Trend)
     cv.text(ix, cy, "Indikator teknikal", f_lab, MUTED, "la")
     cy += 22
-    items = (("RSI", "RSI"), ("Vol surge", "Vol_Surge"), ("Z-score", "ZScore"), ("Beta", "Beta"),
-             ("Momentum", "Momentum"), ("Coppock", "Coppock"), ("Rezim", "Rezim"))
+    items = (
+        ("RSI", "RSI"), ("Vol surge", "Vol_Surge"), ("Z-score", "ZScore"), ("Beta", "Beta"),
+        ("Momentum", "Momentum"), ("Coppock", "Coppock"), ("Trend", "Trend_Consistency"), 
+        ("Likuiditas", "Likuiditas")
+    )
     cw = (iw - 28) / 2
     f_row = _font(14)
     faint = _mix(RULE, SURFACE, 0.55)
     for i, (lab, key) in enumerate(items):
-        col, row = divmod(i, 4)
-        cx, ry = ix + col * (cw + 28), cy + row * 30
+        col, row = divmod(i, 4) # 2 kolom, 4 baris
+        cx, ry = ix + col * (cw + 28), cy + row * 28
         val, vcol = _txt(res.get(key)), TEXT
         if key == "RSI":
             n = _num(val)
@@ -345,16 +372,17 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, net_bu
                 vcol = WARN
         max_w = cw - cv.tw(lab, f_row) - 14
         vf = _fit_font(cv, val, (16, 14, 12), True, max_w)
-        cv.text(cx, ry + 15, lab, f_row, MUTED, "lm")
-        cv.text(cx + cw, ry + 15, _fit(cv, val, vf, max_w), vf, vcol, "rm")
-        if i not in (3, 6):
-            cv.hline(cx, cx + cw, ry + 30, faint)
+        cv.text(cx, ry + 12, lab, f_row, MUTED, "lm")
+        cv.text(cx + cw, ry + 12, _fit(cv, val, vf, max_w), vf, vcol, "rm")
+        if i not in (3, 7): # Garis bawah
+            cv.hline(cx, cx + cw, ry + 28, faint)
 
-# ── Fungsi utama ─────────────────────────────────────────────────────────────
+# ── Fungsi Utama ──
 def generate_infographic_combined(res_swing, res_dt, hires=False):
     base = res_swing or res_dt or {}
     ticker = str(base.get("Saham", "N/A")).replace(".JK", "").replace("$", "").strip() or "N/A"
 
+    # Ambil Nama PT & Chart
     pt_name, df = "Bursa Efek Indonesia", None
     if ticker != "N/A":
         t = yf.Ticker(f"{ticker}.JK")
@@ -375,9 +403,10 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
             close = None
     chg = (close.iloc[-1] / close.iloc[-2] - 1) * 100 if close is not None else None
 
-    # ═══ TARIK DATA DARI DATABASE (BROKSUM & FOREIGN FLOW) ═══
-    ai_summary = "Belum ada ringkasan AI di broksum history."
-    net_buy_str, net_sell_str = "0", "0"
+    # ═══ TARIK DATA DARI DATABASE ═══
+    ai_summary = "Belum ada ringkasan AI."
+    flow_data = {"buy": "-", "sell": "-", "net": "-", "net_val": 0}
+    broker_data = {"net_bandar": "-", "bandar_val": 0, "net_retail": "-", "retail_val": 0}
     
     if ticker != "N/A":
         try:
@@ -387,23 +416,43 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
                 sorted_bs = sorted(broksum_data, key=lambda x: str(x.get('upload_date', '')), reverse=True)
                 ai_summary = sorted_bs[0].get('summary_narrative', ai_summary)
                 
-            # 2. Ambil Net Buy/Sell dari foreign_flow_history
+            # 2. Ambil Foreign Flow dari foreign_flow_history
             f_df = load_foreign_flow_history(ticker, days=1)
             if f_df is not None and not f_df.empty:
                 latest_flow = f_df.iloc[-1]
-                fb = latest_flow.get('foreign_buy', 0)
-                fs = latest_flow.get('foreign_sell', 0)
+                fb = float(latest_flow.get('foreign_buy', 0))
+                fs = float(latest_flow.get('foreign_sell', 0))
+                net_val = fb - fs
                 
                 def fmt_flow(n):
-                    if n >= 1e9: return f"{n/1e9:.2f} M"
-                    if n >= 1e6: return f"{n/1e6:.2f} Jt"
+                    if abs(n) >= 1e9: return f"{n/1e9:.2f} M"
+                    if abs(n) >= 1e6: return f"{n/1e6:.2f} Jt"
                     return f"{n:,.0f}"
                 
-                net_buy_str = fmt_flow(fb)
-                net_sell_str = fmt_flow(fs)
+                flow_data["buy"] = fmt_flow(fb)
+                flow_data["sell"] = fmt_flow(fs)
+                flow_data["net_val"] = net_val
+                flow_data["net"] = fmt_flow(net_val)
+
+            # 3. Ambil Net Bandar & Retail dari bandar_metadata (jika ada di result)
+            bm = base.get('bandar_metadata', {})
+            if bm:
+                # Kita asumsikan ada key raw_weighted atau score untuk net bandar
+                nb_val = bm.get('raw_weighted', 0.0)
+                nr_val = -nb_val # Retail biasanya berlawanan arah dengan bandar
+                broker_data["bandar_val"] = nb_val
+                broker_data["retail_val"] = nr_val
+                
+                def fmt_lot(n):
+                    # Format lot (jika angkanya besar, ubah ke K/M)
+                    if abs(n) >= 1000: return f"{n/1000:.1f}K Lot"
+                    return f"{n:.0f} Lot"
+                
+                broker_data["net_bandar"] = fmt_lot(nb_val * 1000) # Misal dikali 1000 buat visual
+                broker_data["net_retail"] = fmt_lot(nr_val * 1000)
+
         except Exception as e:
             print(f"Gagal load DB untuk infografis: {e}")
-    # ═════════════════════════════════════════════════════════
 
     cv = _Canvas(W, H)
 
@@ -436,10 +485,10 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
     else:
         cv.text(W / 2, 262, "Data chart tidak tersedia", _font(18), MUTED, "mm")
 
-    # Dua kartu (Sekarang mengirimkan ai_summary, net_buy, net_sell)
+    # Kartu Kiri & Kanan
     cw = (W - 2 * M - GAP) / 2
-    _card(cv, res_swing, M, CARDS_Y, cw, CARD_H, "Swing", SWING, price_str, ai_summary, net_buy_str, net_sell_str)
-    _card(cv, res_dt, M + cw + GAP, CARDS_Y, cw, CARD_H, "Daytrade", DAYTRADE, price_str, ai_summary, net_buy_str, net_sell_str)
+    _card(cv, res_swing, M, CARDS_Y, cw, CARD_H, "Swing", SWING, price_str, ai_summary, flow_data, broker_data)
+    _card(cv, res_dt, M + cw + GAP, CARDS_Y, cw, CARD_H, "Daytrade", DAYTRADE, price_str, ai_summary, flow_data, broker_data)
 
     # Footer
     cv.text(W / 2, H - 32, "Engine Trade Pro. Sinyal ini alat bantu analisis, bukan rekomendasi investasi.",
