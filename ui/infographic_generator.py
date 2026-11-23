@@ -1,10 +1,4 @@
-"""Infografis sinyal saham (Swing + Daytrade) dalam satu gambar.
-
-Fungsi publik: generate_infographic_combined(res_swing, res_dt) -> io.BytesIO (PNG)
-Key dict yang dibaca sama seperti versi lama: Saham, Harga, Sinyal, Score, RRR,
-Confidence, Foreign_Net_Buy, Foreign_Net_Sell, AI_Insight, TP_Harga, SL_Harga,
-RSI, Vol_Surge, ZScore, Beta, Momentum, Rezim, Coppock.
-"""
+"""Infografis sinyal saham (Swing + Daytrade) dalam satu gambar."""
 import io
 import os
 import re
@@ -17,6 +11,9 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 from PIL import Image, ImageDraw, ImageFont
 
+# ── IMPORT DATABASE KAMU ──
+from services.sheets_client import load_broksum_history, load_foreign_flow_history
+
 # ── Palet ────────────────────────────────────────────────────────────────────
 BG = "#0e1726"
 SURFACE = "#152238"
@@ -26,15 +23,14 @@ MUTED = "#8fa1bd"
 UP = "#34d399"
 DOWN = "#fb7185"
 WARN = "#fbbf24"
-SWING = "#a78bfa"      # penanda strategi swing
-DAYTRADE = "#38bdf8"   # penanda strategi daytrade
+SWING = "#a78bfa"      
+DAYTRADE = "#38bdf8"   
 
-# ── Ukuran (koordinat logis; dirender 2x lalu diperkecil agar halus) ──────────
+# ── Ukuran ──────────
 W, M, GAP = 1200, 40, 24
 SCALE = 2
 CARDS_Y, CARD_H = 364, 770
 H = CARDS_Y + CARD_H + 64
-
 
 # ── Font ─────────────────────────────────────────────────────────────────────
 _FONTS = {
@@ -42,7 +38,6 @@ _FONTS = {
     True: ["segoeuib.ttf", "arialbd.ttf", "Arial Bold.ttf", "Roboto-Bold.ttf", "DejaVuSans-Bold.ttf"],
 }
 _font_cache = {}
-
 
 def _font(size, bold=False):
     key = (size, bold)
@@ -54,7 +49,7 @@ def _font(size, bold=False):
         "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
     )
     font = None
-    for name in _FONTS[bold] + [bundled]:  # DejaVu bawaan matplotlib = jaring pengaman
+    for name in _FONTS[bold] + [bundled]:
         try:
             font = ImageFont.truetype(name, px)
             break
@@ -67,7 +62,6 @@ def _font(size, bold=False):
             font = ImageFont.load_default()
     _font_cache[key] = font
     return font
-
 
 # ── Kanvas ───────────────────────────────────────────────────────────────────
 class _Canvas:
@@ -101,7 +95,6 @@ class _Canvas:
     def paste(self, im, x, y):
         self.img.paste(im, (round(x * SCALE), round(y * SCALE)))
 
-
 # ── Helper data & teks ───────────────────────────────────────────────────────
 def _txt(v, default="-"):
     if v is None:
@@ -109,9 +102,7 @@ def _txt(v, default="-"):
     s = str(v).strip()
     return default if s.lower() in ("", "none", "nan") else s
 
-
 def _num(v):
-    """Ambil angka pertama dari string ('1.250', '1,250', 'Rp 1.250 (+4%)')."""
     if v is None:
         return None
     if isinstance(v, (int, float)):
@@ -129,7 +120,7 @@ def _num(v):
         sep = "," if "," in s else "."
         parts = s.split(sep)
         if len(parts) > 2 or len(parts[-1]) == 3:
-            s = s.replace(sep, "")      # pemisah ribuan
+            s = s.replace(sep, "")
         elif sep == ",":
             s = s.replace(",", ".")
     try:
@@ -137,16 +128,13 @@ def _num(v):
     except ValueError:
         return None
 
-
 def _idr(v):
     return f"{v:,.0f}".replace(",", ".")
-
 
 def _mix(c1, c2, t):
     a = [int(c1.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
     b = [int(c2.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
     return "#%02x%02x%02x" % tuple(int(a[i] * t + b[i] * (1 - t)) for i in range(3))
-
 
 def _fit(cv, s, font, max_w):
     if cv.tw(s, font) <= max_w:
@@ -155,14 +143,12 @@ def _fit(cv, s, font, max_w):
         s = s[:-1]
     return s.rstrip() + "…"
 
-
 def _fit_font(cv, s, sizes, bold, max_w):
     for size in sizes:
         f = _font(size, bold)
         if cv.tw(s, f) <= max_w:
             return f
     return _font(sizes[-1], bold)
-
 
 def _wrap(cv, text, font, max_w, max_lines):
     lines, cur = [], ""
@@ -184,7 +170,6 @@ def _wrap(cv, text, font, max_w, max_lines):
         lines[-1] = last + "…"
     return lines
 
-
 def _signal_color(sig):
     s = sig.upper()
     if any(k in s for k in ("AVOID", "SELL", "JUAL", "HINDARI")):
@@ -193,11 +178,9 @@ def _signal_color(sig):
         return UP
     return WARN
 
-
 def _sep(cv, x, w, cy):
     cv.hline(x, x + w, cy + 12, RULE)
     return cy + 24
-
 
 # ── Chart ────────────────────────────────────────────────────────────────────
 def _render_chart(close, w, h):
@@ -235,14 +218,13 @@ def _render_chart(close, w, h):
     buf.seek(0)
     return Image.open(buf).convert("RGB")
 
-
 # ── Bar level harga (SL — harga — TP) ────────────────────────────────────────
 def _levels(cv, res, x, y, w, price_raw):
     f_cap, f_val = _font(12), _font(16, True)
     tp_raw, sl_raw = _txt(res.get("TP_Harga")), _txt(res.get("SL_Harga"))
     pr, tp, sl = _num(price_raw), _num(res.get("TP_Harga")), _num(res.get("SL_Harga"))
 
-    if None in (pr, tp, sl):  # format angka tidak terbaca: tampilkan apa adanya
+    if None in (pr, tp, sl):
         half = w / 2
         for i, (lab, val, col) in enumerate((("Target (TP)", tp_raw, UP), ("Stop loss (SL)", sl_raw, DOWN))):
             cv.text(x + i * half, y + 8, lab, _font(13), MUTED, "la")
@@ -279,9 +261,8 @@ def _levels(cv, res, x, y, w, price_raw):
     cv.text(x + w, y + 66, right[0], f_cap, MUTED, "ra")
     cv.text(x + w, y + 80, right[1], f_val, right[2], "ra")
 
-
 # ── Kartu strategi ───────────────────────────────────────────────────────────
-def _card(cv, res, x, y, w, h, title, accent, fallback_price):
+def _card(cv, res, x, y, w, h, title, accent, fallback_price, ai_summary, net_buy, net_sell):
     cv.rect(x, y, x + w, y + h, fill=SURFACE, r=22)
     pad = 28
     ix, iw, cy = x + pad, w - 2 * pad, y + pad
@@ -294,10 +275,11 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price):
         return
     cy += 26
 
-    # Sinyal: elemen utama kartu
-    sig = _txt(res.get("Sinyal"), "N/A").upper()
-    cv.text(ix, cy, sig, _fit_font(cv, sig, (46, 40, 34, 28), True, iw), _signal_color(sig), "la")
-    cy += 58
+    # Sinyal: elemen utama kartu (Pangkas teks jika kepanjangan)
+    sig_full = _txt(res.get("Sinyal"), "N/A").upper()
+    sig = sig_full.split('(')[0].strip() # Hanya ambil teks depan, buang kurung
+    cv.text(ix, cy, sig, _fit_font(cv, sig, (32, 28, 24, 20), True, iw), _signal_color(sig), "la")
+    cy += 45
 
     colw = iw / 3
     for i, (lab, key) in enumerate((("Score", "Score"), ("Risk reward", "RRR"), ("Confidence", "Confidence"))):
@@ -305,49 +287,47 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price):
         val = _txt(res.get(key))
         cv.text(cx, cy, lab, f_lab, MUTED, "la")
         cv.text(cx, cy + 20, val, _fit_font(cv, val, (24, 21, 18, 15), True, colw - 12), TEXT, "la")
-    
     cy = _sep(cv, ix, iw, cy + 48)
 
-    # ═══ TAMBAHAN: ENTRY ZONE & DIP ENTRY ═══
+    # Entry & Dip Entry
     half = iw / 2
     entry_val = _txt(res.get("Entry_Zone"), "-")
-    dip_val = _txt(res.get("Dip_Entry"), "-")
+    dip_val = _txt(res.get("Entry_Ideal_RRR2"), "-")
 
     cv.text(ix, cy, "Entry Zone", f_lab, MUTED, "la")
     cv.text(ix, cy + 20, entry_val, _fit_font(cv, entry_val, (20, 18, 16), True, half - 12), accent, "la")
 
     cv.text(ix + half, cy, "Dip Entry", f_lab, MUTED, "la")
     cv.text(ix + half, cy + 20, dip_val, _fit_font(cv, dip_val, (20, 18, 16), True, half - 12), WARN, "la")
-    
     cy = _sep(cv, ix, iw, cy + 48)
-    # ═══════════════════════════════════════
 
+    # Level Harga
     cv.text(ix, cy, "Level harga", f_lab, MUTED, "la")
     cy += 22
     _levels(cv, res, ix, cy, iw, res.get("Harga") or fallback_price)
     cy = _sep(cv, ix, iw, cy + 100)
 
-    half = iw / 2
-    for i, (lab, key, col) in enumerate((("Net buy asing", "Foreign_Net_Buy", UP),
-                                         ("Net sell asing", "Foreign_Net_Sell", DOWN))):
+    # Net Buy / Sell dari DB
+    for i, (lab, val, col) in enumerate((("Net buy asing", net_buy, UP), ("Net sell asing", net_sell, DOWN))):
         cx = ix + i * half
-        val = _txt(res.get(key), "0")
         cv.text(cx, cy, lab, f_lab, MUTED, "la")
-        cv.text(cx, cy + 20, val, _fit_font(cv, val, (20, 17, 14), True, half - 12), col, "la")
+        cv.text(cx, cy + 20, _txt(val, "0"), _fit_font(cv, _txt(val, "0"), (20, 17, 14), True, half - 12), col, "la")
     cy = _sep(cv, ix, iw, cy + 44)
 
+    # Ringkasan AI dari DB
     cv.text(ix, cy, "Ringkasan AI", f_lab, MUTED, "la")
     cy += 20
-    insight = re.sub(r"<[^>]+>", " ", str(res.get("AI_Insight") or ""))
+    insight = re.sub(r"<[^>]+>", " ", str(ai_summary or ""))
     insight = re.sub(r"\s+", " ", insight).strip()
     if insight in ("", "None"):
-        insight = "Belum ada ringkasan."
+        insight = "Belum ada ringkasan dari database."
     cv.rect(ix, cy + 2, ix + 3, cy + 82, fill=accent, r=1.5)
-    f_ins = _font(15)
+    f_ins = _font(14)
     for i, line in enumerate(_wrap(cv, insight, f_ins, iw - 16, 4)):
         cv.text(ix + 16, cy + i * 21, line, f_ins, "#cbd5e1", "la")
     cy = _sep(cv, ix, iw, cy + 84)
 
+    # Indikator
     cv.text(ix, cy, "Indikator teknikal", f_lab, MUTED, "la")
     cy += 22
     items = (("RSI", "RSI"), ("Vol surge", "Vol_Surge"), ("Z-score", "ZScore"), ("Beta", "Beta"),
@@ -370,10 +350,8 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price):
         if i not in (3, 6):
             cv.hline(cx, cx + cw, ry + 30, faint)
 
-
 # ── Fungsi utama ─────────────────────────────────────────────────────────────
 def generate_infographic_combined(res_swing, res_dt, hires=False):
-    """Gabungkan hasil Swing & Daytrade jadi 1 infografis. hires=True -> output 2x."""
     base = res_swing or res_dt or {}
     ticker = str(base.get("Saham", "N/A")).replace(".JK", "").replace("$", "").strip() or "N/A"
 
@@ -396,6 +374,36 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
         if len(close) < 2:
             close = None
     chg = (close.iloc[-1] / close.iloc[-2] - 1) * 100 if close is not None else None
+
+    # ═══ TARIK DATA DARI DATABASE (BROKSUM & FOREIGN FLOW) ═══
+    ai_summary = "Belum ada ringkasan AI di broksum history."
+    net_buy_str, net_sell_str = "0", "0"
+    
+    if ticker != "N/A":
+        try:
+            # 1. Ambil AI Summary dari broksum_history
+            broksum_data = load_broksum_history(ticker)
+            if broksum_data:
+                sorted_bs = sorted(broksum_data, key=lambda x: str(x.get('upload_date', '')), reverse=True)
+                ai_summary = sorted_bs[0].get('summary_narrative', ai_summary)
+                
+            # 2. Ambil Net Buy/Sell dari foreign_flow_history
+            f_df = load_foreign_flow_history(ticker, days=1)
+            if f_df is not None and not f_df.empty:
+                latest_flow = f_df.iloc[-1]
+                fb = latest_flow.get('foreign_buy', 0)
+                fs = latest_flow.get('foreign_sell', 0)
+                
+                def fmt_flow(n):
+                    if n >= 1e9: return f"{n/1e9:.2f} M"
+                    if n >= 1e6: return f"{n/1e6:.2f} Jt"
+                    return f"{n:,.0f}"
+                
+                net_buy_str = fmt_flow(fb)
+                net_sell_str = fmt_flow(fs)
+        except Exception as e:
+            print(f"Gagal load DB untuk infografis: {e}")
+    # ═════════════════════════════════════════════════════════
 
     cv = _Canvas(W, H)
 
@@ -428,10 +436,10 @@ def generate_infographic_combined(res_swing, res_dt, hires=False):
     else:
         cv.text(W / 2, 262, "Data chart tidak tersedia", _font(18), MUTED, "mm")
 
-    # Dua kartu
+    # Dua kartu (Sekarang mengirimkan ai_summary, net_buy, net_sell)
     cw = (W - 2 * M - GAP) / 2
-    _card(cv, res_swing, M, CARDS_Y, cw, CARD_H, "Swing", SWING, price_str)
-    _card(cv, res_dt, M + cw + GAP, CARDS_Y, cw, CARD_H, "Daytrade", DAYTRADE, price_str)
+    _card(cv, res_swing, M, CARDS_Y, cw, CARD_H, "Swing", SWING, price_str, ai_summary, net_buy_str, net_sell_str)
+    _card(cv, res_dt, M + cw + GAP, CARDS_Y, cw, CARD_H, "Daytrade", DAYTRADE, price_str, ai_summary, net_buy_str, net_sell_str)
 
     # Footer
     cv.text(W / 2, H - 32, "Engine Trade Pro. Sinyal ini alat bantu analisis, bukan rekomendasi investasi.",
