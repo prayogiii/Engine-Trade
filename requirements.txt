@@ -12,6 +12,7 @@ scipy>=1.16.3
 
 # Charts
 plotly>=6.8.0
+matplotlib>=3.8.0   # <-- TAMBAHKAN INI
 
 # Google
 gspread>=6.0
