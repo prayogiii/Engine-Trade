@@ -32,7 +32,7 @@ DAYTRADE = "#38bdf8"   # penanda strategi daytrade
 # ── Ukuran (koordinat logis; dirender 2x lalu diperkecil agar halus) ──────────
 W, M, GAP = 1200, 40, 24
 SCALE = 2
-CARDS_Y, CARD_H = 364, 696
+CARDS_Y, CARD_H = 364, 770
 H = CARDS_Y + CARD_H + 64
 
 
@@ -305,7 +305,22 @@ def _card(cv, res, x, y, w, h, title, accent, fallback_price):
         val = _txt(res.get(key))
         cv.text(cx, cy, lab, f_lab, MUTED, "la")
         cv.text(cx, cy + 20, val, _fit_font(cv, val, (24, 21, 18, 15), True, colw - 12), TEXT, "la")
+    
     cy = _sep(cv, ix, iw, cy + 48)
+
+    # ═══ TAMBAHAN: ENTRY ZONE & DIP ENTRY ═══
+    half = iw / 2
+    entry_val = _txt(res.get("Entry_Zone"), "-")
+    dip_val = _txt(res.get("Dip_Entry"), "-")
+
+    cv.text(ix, cy, "Entry Zone", f_lab, MUTED, "la")
+    cv.text(ix, cy + 20, entry_val, _fit_font(cv, entry_val, (20, 18, 16), True, half - 12), accent, "la")
+
+    cv.text(ix + half, cy, "Dip Entry", f_lab, MUTED, "la")
+    cv.text(ix + half, cy + 20, dip_val, _fit_font(cv, dip_val, (20, 18, 16), True, half - 12), WARN, "la")
+    
+    cy = _sep(cv, ix, iw, cy + 48)
+    # ═══════════════════════════════════════
 
     cv.text(ix, cy, "Level harga", f_lab, MUTED, "la")
     cy += 22
