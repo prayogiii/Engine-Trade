@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 
-# Tambahkan parameter foreign_flow_trend
 def build_stock_analysis_prompt(data_saham: dict, riwayat_text: str,
                                  broksum_context: str, foreign_flow_trend: str = "") -> str:
     """Bangun prompt analisis saham dari konteks yang sudah disiapkan caller."""
@@ -46,7 +45,7 @@ Anda adalah asisten analis saham profesional & pakar Bandarmology. Berikut data 
 Berdasarkan data di atas{' (khususnya dominasi Bandar 🐋 vs Retail 🧑 pada broker flow)' if broksum_context else ''}, berikan analisis ringkas (Bahasa Indonesia) yang mencakup:
 - Makna sinyal teknikal dalam konteks pergerakan saat ini
 {f'- Analisis peta akumulasi/distribusi broker (Bandar vs Retail) & implikasinya pada harga' if broksum_context else ''}
-- **Analisis Tren Foreign Flow:** Bandingkan data hari ini dengan tren beberapa hari terakhir (jika ada). Apakah asing makin agresif akumulasi, atau mulai distribusi?
+- **Analisis Tren Foreign Flow:** Bandingkan data hari ini dengan tren beberapa hari terakhir. Apakah asing makin agresif akumulasi, atau mulai distribusi?
 - Kekuatan dan kelemahan saham
 - Risiko utama
 - Rekomendasi langkah selanjutnya (buy/hold/sell) dengan alasan singkat
