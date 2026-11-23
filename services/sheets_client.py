@@ -133,7 +133,13 @@ def init_sheets():
             sheet.add_worksheet("riwayat", rows=3000, cols=35)
 
         if "v12_memory" not in existing:
-            sheet.add_worksheet("v12_memory", rows=100, cols=3)
+            # Naikkan batas baris jadi 2000 agar muat semua saham IDX
+            sheet.add_worksheet("v12_memory", rows=2000, cols=3) 
+        else:
+            # Jika sheet sudah ada tapi barisnya kurang dari 2000, tambahkan otomatis
+            ws = existing["v12_memory"]
+            if ws.row_count < 2000:
+                ws.add_rows(2000 - ws.row_count)
 
         if "v12_predictions" not in existing:
             sheet.add_worksheet("v12_predictions", rows=500, cols=9)
@@ -239,17 +245,47 @@ def load_v12_memory() -> dict:
 def save_v12_memory(mem: dict):
     try:
         sheet = get_gsheet().worksheet("v12_memory")
-        rows = [{"ticker": t, "data": json.dumps(d)} for t, d in mem.items()]
+        
+        # ═══ 1. BACA DATA LAMA DARI DATABASE ═══
+        existing_records = sheet.get_all_records()
+        merged_mem = {}
+        for row in existing_records:
+            t = row.get("ticker")
+            if t and "data" in row and row["data"]:
+                try:
+                    merged_mem[t] = json.loads(row["data"])
+                except Exception:
+                    pass
+                    
+        # ═══ 2. GABUNGKAN DENGAN DATA BARU ═══
+        merged_mem.update(mem)
+        
+        # ═══ 3. SIAPKAN DATA & AUTO-EXPAND BARIS ═══
+        rows = []
+        def _numpy_converter(o):
+            if isinstance(o, np.integer): return int(o)
+            if isinstance(o, np.floating): return float(o)
+            if isinstance(o, np.ndarray): return o.tolist()
+            if isinstance(o, np.bool_): return bool(o)
+            return str(o)
+            
+        for t, d in merged_mem.items():
+            json_str = json.dumps(d, default=_numpy_converter)
+            rows.append([t, json_str])
+            
+        # Cek apakah butuh nambah baris di Google Sheets
+        needed_rows = len(rows) + 1 # +1 untuk header
+        if sheet.row_count < needed_rows:
+            sheet.add_rows(needed_rows - sheet.row_count)
+            
+        # ═══ 4. TULIS ULANG KE DATABASE ═══
         sheet.clear()
         if rows:
-            all_values = [["ticker", "data"]] + [
-                [r["ticker"], r["data"]] for r in rows
-            ]
+            all_values = [["ticker", "data"]] + rows
             sheet.update(all_values, value_input_option="RAW")
+            
     except Exception as e:
         st.error(f"Gagal menyimpan V12 memory: {e}")
-
-
 # ═══════════════════════════════════════════════════════════════
 # V12 PREDICTIONS
 # ═══════════════════════════════════════════════════════════════
