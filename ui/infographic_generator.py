@@ -6,9 +6,9 @@ from PIL import Image, ImageDraw, ImageFont
 import re
 
 def generate_infographic_combined(res_swing, res_dt):
-    """Menggabungkan SW & DT jadi 1 infografis Landscape lengkap."""
+    """Menggabungkan SW & DT jadi 1 infografis Landscape rapi (Grid System)."""
     
-    # Ambil Ticker dari key 'Saham'
+    # 1. Ekstrak Data Utama
     raw_ticker = (res_swing or res_dt).get('Saham', 'N/A')
     ticker = str(raw_ticker).replace(".JK", "").strip()
     ticker_jk = f"{ticker}.JK"
@@ -23,12 +23,20 @@ def generate_infographic_combined(res_swing, res_dt):
     except Exception:
         pass
 
-    # Setup Kanvas Infografis (Landscape 1600 x 1300)
-    W, H = 1600, 1300
-    img = Image.new('RGB', (W, H), color='#0f1116')
+    # 2. Setup Kanvas (Lebih ringkas: 1200 x 1050)
+    W, H = 1200, 1050
+    BG_COLOR = "#0f1116"
+    CARD_BG = "#1e293b"
+    TEXT_MAIN = "#f8fafc"
+    TEXT_MUTED = "#94a3b8"
+    GREEN = "#10b981"
+    RED = "#ef4444"
+    YELLOW = "#f59e0b"
+    
+    img = Image.new('RGB', (W, H), color=BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    # Load Font
+    # 3. Load Font (Pastikan Arial tersedia)
     def get_font(size, bold=False):
         fonts = ["arialbd.ttf", "arial.ttf"] if bold else ["arial.ttf"]
         for f in fonts:
@@ -36,31 +44,37 @@ def generate_infographic_combined(res_swing, res_dt):
             except: pass
         return ImageFont.load_default()
 
-    font_h1 = get_font(55, True)
-    font_h2 = get_font(35, True)
-    font_sub = get_font(25)
-    font_val = get_font(28, True)
-    font_small = get_font(20)
+    font_h1 = get_font(40, True)
+    font_h2 = get_font(24, True)
+    font_sub = get_font(18)
+    font_val = get_font(20, True)
+    font_small = get_font(14)
 
-    # Header: Ticker & Nama PT
-    draw.text((50, 40), f"${ticker}", font=font_h1, fill="#ffffff")
-    draw.text((50, 100), pt_name, font=font_sub, fill="#94a3b8")
+    # ═══════════════════════════════════════════════════════════
+    # BAGIAN 1: HEADER
+    # ═══════════════════════════════════════════════════════════
+    draw.text((40, 40), f"${ticker}", font=font_h1, fill=TEXT_MAIN)
+    draw.text((40, 90), pt_name, font=font_sub, fill=TEXT_MUTED)
     
-    # Harga (Key 'Harga' berbentuk string, contoh: "76")
     harga_str = (res_swing or res_dt).get('Harga', '0')
-    draw.text((W-350, 40), f"Rp {harga_str}", font=font_h1, fill="#00ffcc")
+    draw.text((W-200, 40), f"Rp {harga_str}", font=font_h1, fill="#00ffcc")
     
     now_str = datetime.now().strftime("%d %b %Y | %H:%M WIB")
-    draw.text((W-350, 100), now_str, font=font_small, fill="#64748b")
+    draw.text((W-200, 90), now_str, font=font_small, fill=TEXT_MUTED)
 
-    # Gambar Mini Chart (Matplotlib)
-    chart_y_offset = 160
+    # ═══════════════════════════════════════════════════════════
+    # BAGIAN 2: MINI CHART
+    # ═══════════════════════════════════════════════════════════
+    chart_y_offset = 130
     if df_chart is not None and not df_chart.empty:
-        fig, ax = plt.subplots(figsize=(16, 2.5), facecolor='#0f1116')
-        ax.set_facecolor('#0f1116')
-        ax.plot(df_chart.index, df_chart['Close'], color='#00ffcc', linewidth=2)
+        fig, ax = plt.subplots(figsize=(12, 2), facecolor=BG_COLOR)
+        ax.set_facecolor(BG_COLOR)
         
-        ax.tick_params(colors='#64748b', labelsize=10)
+        # Garis dan Area Fill
+        ax.plot(df_chart.index, df_chart['Close'], color='#00ffcc', linewidth=2)
+        ax.fill_between(df_chart.index, df_chart['Close'], df_chart['Close'].min(), color='#00ffcc', alpha=0.1)
+        
+        ax.tick_params(colors=TEXT_MUTED, labelsize=10)
         for spine in ax.spines.values(): spine.set_visible(False)
         ax.grid(color='#1e293b', linestyle='--', linewidth=0.5)
         
@@ -69,96 +83,99 @@ def generate_infographic_combined(res_swing, res_dt):
         plt.close(fig)
         buf.seek(0)
         chart_img = Image.open(buf)
-        chart_img = chart_img.resize((W-100, 250))
-        img.paste(chart_img, (50, chart_y_offset))
-    else:
-        draw.text((50, 200), "Data grafik tidak tersedia (Gagal load yfinance)", font=font_sub, fill="#ef4444")
+        chart_img = chart_img.resize((W-80, 200))
+        img.paste(chart_img, (40, chart_y_offset))
     
-    # Garis pemisah
-    draw.line([(50, 450), (W-50, 450)], fill="#334155", width=3)
-    draw.line([(W//2, 470), (W//2, H-50)], fill="#334155", width=2)
+    # Garis Pemisah Horizontal
+    draw.line([(40, 350), (W-40, 350)], fill="#334155", width=2)
 
-    # Fungsi Helper untuk Menggambar Kolom
-    def draw_column(res, x_start, mode_title, mode_icon, color_theme):
+    # ═══════════════════════════════════════════════════════════
+    # BAGIAN 3: KARTU SWING & DAYTRADE
+    # ═══════════════════════════════════════════════════════════
+    
+    def draw_card(res, x_pos, mode_title, color_theme):
+        card_y = 370
+        card_w = 540
+        card_h = 600
+        
+        # Background Kartu
+        draw.rounded_rectangle([x_pos, card_y, x_pos + card_w, card_y + card_h], radius=15, fill=CARD_BG)
+        
         if not res:
-            draw.text((x_start, 480), f"Data {mode_title} Tidak Tersedia", font=font_h2, fill="#64748b")
+            draw.text((x_pos + 20, card_y + 20), f"Data {mode_title} Tidak Tersedia", font=font_h2, fill=TEXT_MUTED)
             return
 
-        y = 480
-        col_w = (W // 2) - 80
+        y = card_y + 20
         
-        # Judul Kolom
-        draw.text((x_start, y), f"{mode_icon} {mode_title.upper()}", font=font_h2, fill=color_theme)
-        y += 50
-
-        # Sinyal & Skor (Key: 'Sinyal', 'Score', 'RRR', 'Confidence')
-        sinyal = str(res.get('Sinyal', 'N/A'))
-        draw.text((x_start, y), sinyal.upper(), font=font_h2, fill="#10b981" if "BUY" in sinyal else "#f59e0b")
+        # 3.1 Judul Mode
+        draw.text((x_pos + 20, y), mode_title.upper(), font=font_h2, fill=color_theme)
         y += 40
-        draw.text((x_start, y), f"Score: {res.get('Score', '0.000')} | RRR: {res.get('RRR', '0.0')} | Conf: {res.get('Confidence', '0%')}", font=font_val, fill="#e2e8f0")
-        y += 40
-
-        # AI Summary & Foreign Flow Box
-        draw.rectangle([x_start, y, x_start + col_w, y + 180], fill="#1e293b", outline="#334155")
-        draw.text((x_start + 15, y + 15), "AI SUMMARY + NET BANDAR", font=font_small, fill="#94a3b8")
         
-        # Key: 'Foreign_Net_Buy' & 'Foreign_Net_Sell'
+        # 3.2 Sinyal & Skor
+        sinyal = str(res.get('Sinyal', 'N/A')).upper()
+        sig_color = GREEN if "BUY" in sinyal else (RED if "AVOID" in sinyal else YELLOW)
+        draw.text((x_pos + 20, y), sinyal, font=font_val, fill=sig_color)
+        
+        # Kotak Skor
+        draw.rounded_rectangle([x_pos + 20, y + 30, x_pos + card_w - 20, y + 80], radius=8, fill="#0f1116")
+        draw.text((x_pos + 30, y + 45), f"Score: {res.get('Score', '-')}", font=font_sub, fill=TEXT_MAIN)
+        draw.text((x_pos + 180, y + 45), f"RRR: {res.get('RRR', '-')}", font=font_sub, fill=TEXT_MAIN)
+        draw.text((x_pos + 320, y + 45), f"Conf: {res.get('Confidence', '-')}", font=font_sub, fill=TEXT_MAIN)
+        y += 100
+        
+        # 3.3 AI Summary Box
+        draw.rounded_rectangle([x_pos + 20, y, x_pos + card_w - 20, y + 120], radius=8, fill="#0f1116", outline="#334155", width=1)
+        draw.text((x_pos + 30, y + 10), "AI SUMMARY + NET BANDAR", font=font_small, fill=TEXT_MUTED)
+        
         f_buy = str(res.get('Foreign_Net_Buy', '0'))
         f_sell = str(res.get('Foreign_Net_Sell', '0'))
-        draw.text((x_start + 15, y + 50), f"Net Buy: {f_buy}", font=font_sub, fill="#10b981")
-        draw.text((x_start + 250, y + 50), f"Net Sell: {f_sell}", font=font_sub, fill="#ef4444")
+        draw.text((x_pos + 30, y + 30), f"Net Buy: {f_buy}", font=font_sub, fill=GREEN)
+        draw.text((x_pos + 250, y + 30), f"Net Sell: {f_sell}", font=font_sub, fill=RED)
         
-        # Key: 'AI_Insight'
         insight = str(res.get('AI_Insight', ''))
-        # Bersihkan tag HTML <br> jika ada
-        insight = re.sub(r'<[^>]+>', ' ', insight)
+        insight = re.sub(r'<[^>]+>', ' ', insight) # Bersihkan HTML
         if insight and insight != 'None':
             words = insight.split()
             line = ""
-            line_y = y + 95
+            line_y = y + 60
             for w in words:
-                if len(line + w) < 75:
+                if len(line + w) < 50: # Batasi karakter per baris
                     line += w + " "
                 else:
-                    draw.text((x_start + 15, line_y), line, font=font_small, fill="#cbd5e1")
+                    draw.text((x_pos + 30, line_y), line, font=font_small, fill="#cbd5e1")
                     line = w + " "
-                    line_y += 25
-                    if line_y > y + 160: break
-        y += 200
+                    line_y += 18
+                    if line_y > y + 100: break
+        y += 140
 
-        # Coppock & Regime Box (Key: 'Coppock', 'Rezim')
-        draw.rectangle([x_start, y, x_start + col_w, y + 70], fill="#1e293b")
-        draw.text((x_start + 15, y + 10), f"Coppock: {res.get('Coppock', 'N/A')}", font=font_sub, fill="#e2e8f0")
-        draw.text((x_start + col_w//2, y + 10), f"Regime: {res.get('Rezim', 'N/A')}", font=font_sub, fill="#e2e8f0")
+        # 3.4 TP & SL Box (Grid 2 Kolom)
+        box_w = (card_w - 50) // 2
+        draw.rounded_rectangle([x_pos + 20, y, x_pos + 20 + box_w, y + 70], radius=8, fill="#0f1116", outline=GREEN, width=1)
+        draw.text((x_pos + 30, y + 10), "ENTRY / TP", font=font_small, fill=TEXT_MUTED)
+        draw.text((x_pos + 30, y + 30), f"{res.get('TP_Harga', '-')}", font=font_val, fill=GREEN)
+        
+        draw.rounded_rectangle([x_pos + 30 + box_w, y, x_pos + card_w - 20, y + 70], radius=8, fill="#0f1116", outline=RED, width=1)
+        draw.text((x_pos + 40 + box_w, y + 10), "STOP LOSS", font=font_small, fill=TEXT_MUTED)
+        draw.text((x_pos + 40 + box_w, y + 30), f"{res.get('SL_Harga', '-')}", font=font_val, fill=RED)
         y += 90
 
-        # Harga Estimasi, TP, SL (Key: 'Estimasi_Netral', 'Estimasi_Sinyal', 'TP_Harga', 'SL_Harga')
-        est_netral = str(res.get('Estimasi_Netral', '-'))
-        est_sinyal = str(res.get('Estimasi_Sinyal', '-'))
-        tp_val = str(res.get('TP_Harga', '-'))
-        sl_val = str(res.get('SL_Harga', '-'))
-        
-        draw.text((x_start, y), f"Estimasi Netral: {est_netral} | Sinyal: {est_sinyal}", font=font_val, fill="#00ffcc")
-        y += 40
-        draw.text((x_start, y), f"🎯 Entry Zone: {res.get('Entry_Zone', 'N/A')}", font=font_val, fill="#00ffcc")
-        y += 40
-        draw.text((x_start, y), f"📈 TP: {tp_val}", font=font_val, fill="#10b981")
-        draw.text((x_start + 350, y), f"🛑 SL: {sl_val}", font=font_val, fill="#ef4444")
-        y += 60
-
-        # Indikator Teknikal (Key: 'RSI', 'Vol_Surge', 'ZScore', 'Beta', 'Momentum')
-        draw.text((x_start, y), "INDIKATOR TEKNIKAL", font=font_small, fill="#94a3b8")
+        # 3.5 Indikator Teknikal
+        draw.text((x_pos + 20, y), "INDIKATOR TEKNIKAL", font=font_small, fill=TEXT_MUTED)
+        y += 25
+        draw.text((x_pos + 20, y), f"RSI: {res.get('RSI', '-')}   |   Vol: {res.get('Vol_Surge', '-')}   |   Z-Score: {res.get('ZScore', '-')}", font=font_sub, fill=TEXT_MAIN)
         y += 30
-        draw.text((x_start, y), f"RSI: {res.get('RSI', '-')}  |  Vol Surge: {res.get('Vol_Surge', '-')}  |  Z-Score: {res.get('ZScore', '-')}", font=font_sub, fill="#e2e8f0")
-        y += 40
-        draw.text((x_start, y), f"Beta: {res.get('Beta', '-')}  |  Momentum: {res.get('Momentum', '-')}", font=font_sub, fill="#e2e8f0")
+        draw.text((x_pos + 20, y), f"Beta: {res.get('Beta', '-')}  |  Momentum: {res.get('Momentum', '-')}", font=font_sub, fill=TEXT_MAIN)
+        y += 30
+        draw.text((x_pos + 20, y), f"Regime: {res.get('Rezim', '-')}", font=font_sub, fill=TEXT_MAIN)
+        y += 30
+        draw.text((x_pos + 20, y), f"Coppock: {res.get('Coppock', '-')}", font=font_sub, fill=TEXT_MAIN)
 
-    # Gambar Kiri (Swing) & Kanan (Daytrade)
-    draw_column(res_swing, 50, "Swing", "📆", "#a855f7")
-    draw_column(res_dt, W//2 + 30, "Daytrade", "⏱️", "#06b6d4")
+    # Gambar Kartu Kiri & Kanan
+    draw_card(res_swing, 40, "SWING / SW", "#a855f7")
+    draw_card(res_dt, 620, "DAYTRADE / DT", "#06b6d4")
 
     # Watermark Bawah
-    draw.text((W//2 - 150, H - 40), "Generated by Engine Trade Pro", font=font_small, fill="#475569")
+    draw.text((W//2 - 100, H - 40), "Generated by Engine Trade Pro", font=font_small, fill="#475569")
 
     # Simpan ke BytesIO
     img_byte_arr = io.BytesIO()
