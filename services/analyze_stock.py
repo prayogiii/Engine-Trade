@@ -91,6 +91,9 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
     foreign_zscore_val = _bandar["foreign_zscore_val"]
     is_retail_trap = _bandar["is_retail_trap"]
     bandar_metadata = _bandar["bandar_metadata"]
+    # Ambil data Net Buy/Sell dari API BEI
+    foreign_net_buy = bandar_metadata.get("net_buy", "N/A") if bandar_metadata else "N/A"
+    foreign_net_sell = bandar_metadata.get("net_sell", "N/A") if bandar_metadata else "N/A"
 
     # 5. BERITA & SENTIMEN
     _news = load_news_and_sentiment(ticker_raw, ticker_info)
@@ -646,6 +649,8 @@ def analyze_stock(ticker_input, harga_manual, harga_terakhir_manual,
         "foreign_zscore_val": foreign_zscore_val,
         "is_retail_trap": is_retail_trap,
         "bandar_metadata": bandar_metadata,
+        "foreign_net_buy": foreign_net_buy,
+        "foreign_net_sell": foreign_net_sell,
         "is_mtf_bullish": is_mtf_bullish,
         "mtf_status_text": mtf_status_text,
         "is_marking_close": is_marking_close,
