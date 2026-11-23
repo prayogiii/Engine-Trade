@@ -621,6 +621,19 @@ def simpan_riwayat(ringkasan, aksi_mode="simpan_baru", target_saham=None):
             rows = [[row.get(h, "") for h in headers] for row in data]
             sheet.clear()
             sheet.update([headers] + rows, value_input_option="RAW")
+            
+            # ═══ TAMBAHKAN BLOK INI ═══
+            # Format kolom AI_Insight agar teksnya di-clip (tidak bikin baris membengkak)
+            if "AI_Insight" in headers:
+                col_idx = headers.index("AI_Insight") + 1
+                col_letter = gspread.utils.rowcol_to_a1(1, col_idx)[:-1] # Dapatkan huruf kolom (misal 'N')
+                try:
+                    sheet.format(f"{col_letter}:{col_letter}", {
+                        "wrapStrategy": "CLIP", # Potong teks secara visual
+                        "verticalAlignment": "MIDDLE"
+                    })
+                except Exception as e:
+                    print(f"Gagal format AI_Insight: {e}")
 
         st.session_state.riwayat = data
         if aksi_mode == "update":
